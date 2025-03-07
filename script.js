@@ -1,3 +1,94 @@
-function showMessage() {
-    document.getElementById("message").innerText = "This is your tarot message!";
+// The full 78-card deck with name + external image URL
+const tarotDeck = [
+  { name: "Fool",               image: "https://www.learntarot.com/bigjpgs/maj00.jpg" },
+  { name: "Magician",           image: "https://www.learntarot.com/bigjpgs/maj01.jpg" },
+  { name: "High Priestess",     image: "https://www.learntarot.com/bigjpgs/maj02.jpg" },
+  { name: "Empress",            image: "https://www.learntarot.com/bigjpgs/maj03.jpg" },
+  { name: "Emperor",            image: "https://www.learntarot.com/bigjpgs/maj04.jpg" },
+  { name: "Hierophant",         image: "https://www.learntarot.com/bigjpgs/maj05.jpg" },
+  { name: "Lovers",             image: "https://www.learntarot.com/bigjpgs/maj06.jpg" },
+  { name: "Chariot",            image: "https://www.learntarot.com/bigjpgs/maj07.jpg" },
+  { name: "Strength",           image: "https://www.learntarot.com/bigjpgs/maj08.jpg" },
+  { name: "Hermit",             image: "https://www.learntarot.com/bigjpgs/maj09.jpg" },
+  { name: "Wheel of Fortune",   image: "https://www.learntarot.com/bigjpgs/maj10.jpg" },
+  { name: "Justice",            image: "https://www.learntarot.com/bigjpgs/maj11.jpg" },
+  { name: "Hanged Man",         image: "https://www.learntarot.com/bigjpgs/maj12.jpg" },
+  { name: "Death",              image: "https://www.learntarot.com/bigjpgs/maj13.jpg" },
+  { name: "Temperance",         image: "https://www.learntarot.com/bigjpgs/maj14.jpg" },
+  { name: "Devil",              image: "https://www.learntarot.com/bigjpgs/maj15.jpg" },
+  { name: "Tower",              image: "https://www.learntarot.com/bigjpgs/maj16.jpg" },
+  { name: "Star",               image: "https://www.learntarot.com/bigjpgs/maj17.jpg" },
+  { name: "Moon",               image: "https://www.learntarot.com/bigjpgs/maj18.jpg" },
+  { name: "Sun",                image: "https://www.learntarot.com/bigjpgs/maj19.jpg" },
+  { name: "Judgement",          image: "https://www.learntarot.com/bigjpgs/maj20.jpg" },
+  { name: "World",              image: "https://www.learntarot.com/bigjpgs/maj21.jpg" },
+  { name: "Ace of Wands",       image: "https://www.learntarot.com/bigjpgs/wands01.jpg" },
+  { name: "Two of Wands",       image: "https://www.learntarot.com/bigjpgs/wands02.jpg" },
+  { name: "Three of Wands",     image: "https://www.learntarot.com/bigjpgs/wands03.jpg" },
+  { name: "Four of Wands",      image: "https://www.learntarot.com/bigjpgs/wands04.jpg" },
+  { name: "Five of Wands",      image: "https://www.learntarot.com/bigjpgs/wands05.jpg" },
+  { name: "Six of Wands",       image: "https://www.learntarot.com/bigjpgs/wands06.jpg" },
+  { name: "Seven of Wands",     image: "https://www.learntarot.com/bigjpgs/wands07.jpg" },
+  { name: "Eight of Wands",     image: "https://www.learntarot.com/bigjpgs/wands08.jpg" },
+  { name: "Nine of Wands",      image: "https://www.learntarot.com/bigjpgs/wands09.jpg" },
+  { name: "Ten of Wands",       image: "https://www.learntarot.com/bigjpgs/wands10.jpg" },
+  { name: "Page of Wands",      image: "https://www.learntarot.com/bigjpgs/wands11.jpg" },
+  { name: "Knight of Wands",    image: "https://www.learntarot.com/bigjpgs/wands12.jpg" },
+  { name: "Queen of Wands",     image: "https://www.learntarot.com/bigjpgs/wands13.jpg" },
+  { name: "King of Wands",      image: "https://www.learntarot.com/bigjpgs/wands14.jpg" },
+  { name: "Ace of Cups",        image: "https://www.learntarot.com/bigjpgs/cups01.jpg" },
+  { name: "Two of Cups",        image: "https://www.learntarot.com/bigjpgs/cups02.jpg" },
+  { name: "Three of Cups",      image: "https://www.learntarot.com/bigjpgs/cups03.jpg" },
+  { name: "Four of Cups",       image: "https://www.learntarot.com/bigjpgs/cups04.jpg" },
+  { name: "Five of Cups",       image: "https://www.learntarot.com/bigjpgs/cups05.jpg" },
+  { name: "Six of Cups",        image: "https://www.learntarot.com/bigjpgs/cups06.jpg" },
+  { name: "Seven of Cups",      image: "https://www.learntarot.com/bigjpgs/cups07.jpg" },
+  { name: "Eight of Cups",      image: "https://www.learntarot.com/bigjpgs/cups08.jpg" },
+  { name: "Nine of Cups",       image: "https://www.learntarot.com/bigjpgs/cups09.jpg" },
+  { name: "Ten of Cups",        image: "https://www.learntarot.com/bigjpgs/cups10.jpg" },
+  { name: "Page of Cups",       image: "https://www.learntarot.com/bigjpgs/cups11.jpg" },
+  { name: "Knight of Cups",     image: "https://www.learntarot.com/bigjpgs/cups12.jpg" },
+  { name: "Queen of Cups",      image: "https://www.learntarot.com/bigjpgs/cups13.jpg" },
+  { name: "King of Cups",       image: "https://www.learntarot.com/bigjpgs/cups14.jpg" },
+  { name: "Ace of Swords",      image: "https://www.learntarot.com/bigjpgs/swords01.jpg" },
+  { name: "Two of Swords",      image: "https://www.learntarot.com/bigjpgs/swords02.jpg" },
+  { name: "Three of Swords",    image: "https://www.learntarot.com/bigjpgs/swords03.jpg" },
+  { name: "Four of Swords",     image: "https://www.learntarot.com/bigjpgs/swords04.jpg" },
+  { name: "Five of Swords",     image: "https://www.learntarot.com/bigjpgs/swords05.jpg" },
+  { name: "Six of Swords",      image: "https://www.learntarot.com/bigjpgs/swords06.jpg" },
+  { name: "Seven of Swords",    image: "https://www.learntarot.com/bigjpgs/swords07.jpg" },
+  { name: "Eight of Swords",    image: "https://www.learntarot.com/bigjpgs/swords08.jpg" },
+  { name: "Nine of Swords",     image: "https://www.learntarot.com/bigjpgs/swords09.jpg" },
+  { name: "Ten of Swords",      image: "https://www.learntarot.com/bigjpgs/swords10.jpg" },
+  { name: "Page of Swords",     image: "https://www.learntarot.com/bigjpgs/swords11.jpg" },
+  { name: "Knight of Swords",   image: "https://www.learntarot.com/bigjpgs/swords12.jpg" },
+  { name: "Queen of Swords",    image: "https://www.learntarot.com/bigjpgs/swords13.jpg" },
+  { name: "King of Swords",     image: "https://www.learntarot.com/bigjpgs/swords14.jpg" },
+  { name: "Ace of Pents",       image: "https://www.learntarot.com/bigjpgs/pents01.jpg" },
+  { name: "Two of Pents",       image: "https://www.learntarot.com/bigjpgs/pents02.jpg" },
+  { name: "Three of Pents",     image: "https://www.learntarot.com/bigjpgs/pents03.jpg" },
+  { name: "Four of Pents",      image: "https://www.learntarot.com/bigjpgs/pents04.jpg" },
+  { name: "Five of Pents",      image: "https://www.learntarot.com/bigjpgs/pents05.jpg" },
+  { name: "Six of Pents",       image: "https://www.learntarot.com/bigjpgs/pents06.jpg" },
+  { name: "Seven of Pents",     image: "https://www.learntarot.com/bigjpgs/pents07.jpg" },
+  { name: "Eight of Pents",     image: "https://www.learntarot.com/bigjpgs/pents08.jpg" },
+  { name: "Nine of Pents",      image: "https://www.learntarot.com/bigjpgs/pents09.jpg" },
+  { name: "Ten of Pents",       image: "https://www.learntarot.com/bigjpgs/pents10.jpg" },
+  { name: "Page of Pents",      image: "https://www.learntarot.com/bigjpgs/pents11.jpg" },
+  { name: "Knight of Pents",    image: "https://www.learntarot.com/bigjpgs/pents12.jpg" },
+  { name: "Queen of Pents",     image: "https://www.learntarot.com/bigjpgs/pents13.jpg" },
+  { name: "King of Pents",      image: "https://www.learntarot.com/bigjpgs/pents14.jpg" }
+];
+
+// This runs when you click the local "RoseLilyRed.jpg"
+function drawRandomCard() {
+  // Pick a random index
+  const randomIndex = Math.floor(Math.random() * tarotDeck.length);
+  const chosenCard = tarotDeck[randomIndex];
+  
+  // Update text name
+  document.getElementById("cardName").textContent = chosenCard.name;
+  
+  // Update the image source to the externally hosted card
+  document.getElementById("tarotCard").src = chosenCard.image;
 }
