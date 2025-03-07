@@ -1,46 +1,40 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="UTF-8" />
   <title>Random Tarot Card</title>
-  <meta name="description" content="Pick a tarot card for daily guidance, advice, and introspection">
-  <meta property="og:title" content="Random Tarot Card"/>
-  <meta property="og:image" content="RoseLilyRed.jpg"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   
-  <!-- Load the stylesheet (black background, center image) -->
-  <link rel="stylesheet" href="style.css">
-  
-  <!-- Google Ads (optional; remove if not needed) -->
-  <script data-ad-client="ca-pub-6890691947221885" async
-    src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js">
-  </script>
+  <!-- Inline CSS to ensure background is BLACK -->
+  <style>
+    /* Make background black, remove margins, center the image */
+    body {
+      background-color: black;
+      margin: 0;
+      padding: 0;
+      text-align: center; /* centers the image horizontally */
+    }
+
+    /* The card image takes up as much space as possible, 
+       but keeps aspect ratio. Cursor changes to pointer on hover. */
+    img {
+      display: block;
+      margin: 0 auto;
+      max-width: 100%;
+      max-height: 100vh;
+      cursor: pointer;
+    }
+  </style>
 </head>
 <body>
-  <!-- The only visible element: Your local RoseLilyRed.jpg -->
-  <img
-    src="RoseLilyRed.jpg"
-    onclick="newPage()"
+  <!-- Local image to start (RoseLilyRed.jpg must be in the same folder) -->
+  <img 
+    src="RoseLilyRed.jpg" 
+    onclick="newPage()" 
     alt="Tarot Card"
   />
 
-  <!-- Optionally, include your ad container here, if you want ads.
-       Otherwise remove this <div> entirely. -->
-  <div class="ad">
-    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>
-    <!-- Testhorizontalmain -->
-    <ins class="adsbygoogle"
-         style="display:block"
-         data-ad-client="ca-pub-6890691947221885"
-         data-ad-slot="4310044477"
-         data-ad-format="auto"
-         data-full-width-responsive="true">
-    </ins>
-    <script>
-      (adsbygoogle = window.adsbygoogle || []).push({});
-    </script>
-  </div>
-
-  <!-- Load the JavaScript AFTER the image tag -->
+  <!-- Load the JavaScript AFTER the HTML so it can attach to the img -->
   <script src="Randomizer.js"></script>
 </body>
 </html>
