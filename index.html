@@ -1,16 +1,27 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tarot Proof of Concept</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Random Tarot</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1>Random Tarot Proof of Concept</h1>
-    <p id="message">Click the button to get a message.</p>
-    <button onclick="showMessage()">Click Me</button>
+  <h1>Click the Tarot Card!</h1>
 
-    <script src="script.js"></script>
+  <!-- Card Name Goes Here -->
+  <p id="cardName"></p>
+  
+  <!-- The Card Image:
+       Initially shows the local RoseLilyRed.jpg.
+       Clicking it triggers 'drawRandomCard()' to load an external image. -->
+  <img
+    id="tarotCard"
+    src="RoseLilyRed.jpg"
+    alt="Tarot Card"
+    onclick="drawRandomCard()" 
+  />
+
+  <script src="script.js"></script>
 </body>
 </html>
