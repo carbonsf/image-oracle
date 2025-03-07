@@ -1,22 +1,20 @@
+/* Simple black background and centered card image */
 body {
-  text-align: center;
-  font-family: Arial, sans-serif;
-  margin: 2rem;
-  background-color: #f8f8f8;
+  background-color: black;
+  margin: 0;
+  padding: 0;
+  text-align: center; /* Centers the image horizontally */
 }
 
-h1 {
-  margin-bottom: 1rem;
+img {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  max-height: 100vh;
+  cursor: pointer;  /* Show pointer on hover */
 }
 
-#cardName {
-  font-size: 1.5rem;
-  margin: 1rem 0;
-}
-
-#tarotCard {
-  max-width: 300px;
-  cursor: pointer;
-  border: 2px solid #000;
-  border-radius: 4px;
+/* Optional styling for the ad container */
+.ad {
+  margin: 1rem auto;
 }
