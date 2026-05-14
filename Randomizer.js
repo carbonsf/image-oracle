@@ -11,6 +11,21 @@ let showingBack = true;
 
 const BACK_SRC = "RoseLilyRed.jpg";
 
+// --- Deck state: draw-without-replacement -----------------------------
+// `deck` is the set of card indices not yet drawn this shuffle. When it
+// empties we reshuffle (auto-visualized as a settle), or the querent can
+// reshuffle manually via long-press on the back.
+const DECK_SIZE = 78;
+function freshDeck() {
+  return Array.from({ length: DECK_SIZE }, (_, i) => i);
+}
+let deck = freshDeck();
+
+// Set true by the long-press handlers when the gesture should NOT also
+// fire a tap-draw on release. Consumed (cleared) by the next newPage call
+// regardless of outcome.
+let consumeNextClick = false;
+
 // Subtle tactile beat at the moment of reveal / set-down. Feature-detected
 // because navigator.vibrate is undefined on iOS Safari and many desktops;
 // where present-but-no-hardware (most desktops), the call is a silent
@@ -138,6 +153,10 @@ async function pickRandomIndex(max, event) {
 }
 
 async function newPage(event) {
+  // If the long-press just fired a reshuffle (or aborted past the pulse
+  // threshold), swallow the trailing click so we don't immediately draw.
+  if (consumeNextClick) { consumeNextClick = false; return; }
+
   // 78 external card images from learntarot.com:
   const allCards = [
     "https://www.learntarot.com/bigjpgs/maj00.jpg",
@@ -235,13 +254,21 @@ async function newPage(event) {
 
 // "Breath": dim + recede, fetch entropy, swap to the chosen card, fade up.
 async function drawCard(imgEl, event, allCards) {
+  // If the deck is exhausted, honor the moment with a settle animation
+  // before drawing the first card of the new shuffle.
+  if (deck.length === 0) {
+    await playSettle(imgEl);
+    deck = freshDeck();
+  }
+
   imgEl.classList.add("dimmed");
   const holdUntil = performance.now() + MIN_HOLD_MS;
 
-  // Mix cosmic bytes with the gesture, preload the chosen image so the
-  // reveal doesn't stall on a slow JPG.
-  const idx = await pickRandomIndex(allCards.length, event);
-  const chosenUrl = allCards[idx];
+  // Pick from the remaining deck (without replacement) — splice removes
+  // the chosen index so it can't repeat until the next reshuffle.
+  const pickAt = await pickRandomIndex(deck.length, event);
+  const cardIdx = deck.splice(pickAt, 1)[0];
+  const chosenUrl = allCards[cardIdx];
   await preloadImage(chosenUrl);
 
   // Honor a minimum hold so the transition has rhythm even on cache hits.
@@ -283,4 +310,129 @@ async function setDownToBack(imgEl) {
     showingBack = true;
     setTimeout(() => { drawing = false; }, 300);
   });
+}
+
+// Play the settle animation once. 520ms matches the deckSettle keyframe.
+function playSettle(imgEl) {
+  return new Promise((resolve) => {
+    imgEl.classList.add("settling");
+    setTimeout(() => {
+      imgEl.classList.remove("settling");
+      resolve();
+    }, 520);
+  });
+}
+
+// --- Long-press reshuffle ---------------------------------------------
+// Critical design: the existing onclick="newPage(event)" on the <img>
+// stays UNTOUCHED — it's the only thing that draws a card. The long-press
+// logic below only (a) plays the charge/commit animations and (b) sets
+// `consumeNextClick` so the click that follows finger-release doesn't
+// also draw. We use classic touch + mouse events (the most reliable path
+// on iOS WebKit); pointer events are avoided because their cancel timing
+// is inconsistent on iOS. The CSS rule `touch-action: none` on the img
+// stops iOS from firing its own gesture-cancel events during the hold.
+
+const PRESS_PULSE_MS = 600;     // when the charge-up pulse begins
+const PRESS_COMMIT_MS = 1500;   // when the reshuffle commits
+
+let pulseTimer = null;
+let commitTimer = null;
+let pulseStarted = false;
+let pressCommitted = false;
+
+function clearPressTimers() {
+  if (pulseTimer)  { clearTimeout(pulseTimer);  pulseTimer  = null; }
+  if (commitTimer) { clearTimeout(commitTimer); commitTimer = null; }
+}
+
+function pressStart() {
+  // Only the back accepts the reshuffle gesture, and only when idle.
+  if (!showingBack || drawing) return;
+
+  // Clear any stale flag from a prior weird sequence (e.g. a long-press
+  // whose trailing click never fired). A fresh touch always re-enables
+  // the normal tap-to-draw path.
+  consumeNextClick = false;
+  pulseStarted = false;
+  pressCommitted = false;
+  clearPressTimers();
+
+  const imgEl = document.querySelector("img");
+
+  pulseTimer = setTimeout(() => {
+    if (!showingBack || drawing) return;
+    pulseStarted = true;
+    imgEl.classList.add("charging");
+    haptic(4);
+
+    commitTimer = setTimeout(() => {
+      if (!showingBack || drawing) return;
+      pressCommitted = true;
+      imgEl.classList.remove("charging");
+      haptic(12);
+
+      // Swallow the click that will follow finger-release so the
+      // reshuffle isn't immediately followed by a card draw.
+      consumeNextClick = true;
+
+      // Commit: play the settle, then reset the deck. Use the same
+      // `drawing` flag so nothing else fires during the animation.
+      drawing = true;
+      playSettle(imgEl).then(() => {
+        deck = freshDeck();
+        drawing = false;
+      });
+    }, PRESS_COMMIT_MS - PRESS_PULSE_MS);
+  }, PRESS_PULSE_MS);
+}
+
+function pressEnd() {
+  clearPressTimers();
+
+  if (pressCommitted) {
+    // Commit already handled everything; the click swallow is set.
+    pressCommitted = false;
+    pulseStarted = false;
+    return;
+  }
+
+  if (pulseStarted) {
+    // Released during the pulse — abort. Stop the animation and swallow
+    // the trailing click so we don't draw on release.
+    const imgEl = document.querySelector("img");
+    if (imgEl) imgEl.classList.remove("charging");
+    consumeNextClick = true;
+    pulseStarted = false;
+    return;
+  }
+
+  // Pulse never started (a normal tap). Do nothing — let the onclick
+  // fire `newPage` and draw a card.
+}
+
+function wireLongPress() {
+  const imgEl = document.querySelector("img");
+  if (!imgEl) return;
+
+  // Touch (mobile). Passive listeners — we never preventDefault; the
+  // click path must remain reachable.
+  imgEl.addEventListener("touchstart", pressStart, { passive: true });
+  imgEl.addEventListener("touchend",   pressEnd,   { passive: true });
+  imgEl.addEventListener("touchcancel", pressEnd,  { passive: true });
+
+  // Mouse (desktop).
+  imgEl.addEventListener("mousedown",  pressStart);
+  imgEl.addEventListener("mouseup",    pressEnd);
+  imgEl.addEventListener("mouseleave", pressEnd);
+
+  // Suppress iOS save-image / context menu on long-press as a belt-and-
+  // suspenders next to the CSS callout suppression.
+  imgEl.addEventListener("contextmenu", (e) => e.preventDefault());
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", wireLongPress);
+} else {
+  wireLongPress();
 }
