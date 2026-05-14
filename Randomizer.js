@@ -17,11 +17,7 @@ const BACK_SRC = "RoseLilyRed.jpg";
 // API allows. Strategy: pick a random upload day between Flickr's early
 // years and today, search portraits uploaded that day, jump to a random
 // page within the results, pick a random photo from that page.
-// Flickr "key-only" public-read methods (like flickr.photos.search) need
-// only the API key. The secret is kept here for completeness / future
-// signed calls but isn't sent on the wire by anything in this file.
 const FLICKR_API_KEY = "bf234cae7bad1fed6373f96001293cd5";
-const FLICKR_API_SECRET = "6f87a42dee30669a";
 const FLICKR_REST = "https://api.flickr.com/services/rest/";
 const FLICKR_EPOCH = new Date("2005-01-01").getTime();
 const FLICKR_MAX_ATTEMPTS = 4;
