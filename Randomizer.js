@@ -24,6 +24,48 @@ const FLICKR_MAX_ATTEMPTS = 4;
 const FLICKR_PER_PAGE = 100;
 const FLICKR_RESULT_CAP = 4000; // Flickr only paginates the first 4000 hits
 
+// Ask Flickr to return URLs for several sizes in the search response, so
+// we can pick the smallest one that still covers the device's long edge.
+// _z=640, _c=800, _b=1024, _h=1600, _k=2048 (long edge in px).
+const FLICKR_EXTRAS = "url_z,url_c,url_b,url_h,url_k";
+
+// Device-dependent target: the card's long edge in CSS px times DPR.
+// Because the <img> is constrained to the back's aspect ratio (~0.578)
+// and pinned inside the viewport, its long edge is essentially the
+// viewport long edge (or the short edge / aspect on very wide screens).
+// Computed once at load — orientation changes are rare enough that we
+// don't bother recomputing per-draw.
+function computeCardTargetPx() {
+  const dpr = window.devicePixelRatio || 1;
+  const vw = window.innerWidth || 360;
+  const vh = window.innerHeight || 640;
+  const aspect = 825 / 1427; // must match the CSS in index.html
+  const longEdgeCss = Math.min(vh, vw / aspect);
+  return Math.ceil(longEdgeCss * dpr);
+}
+const CARD_TARGET_PX = computeCardTargetPx();
+
+// From a photo object's extras (url_z/url_c/...), pick the smallest size
+// whose long edge >= target — or the largest available if none qualify.
+function pickBestSizeUrl(photo, target) {
+  const candidates = [];
+  for (const k of ["z", "c", "b", "h", "k"]) {
+    const url = photo[`url_${k}`];
+    if (!url) continue;
+    const w = +photo[`width_${k}`] || 0;
+    const h = +photo[`height_${k}`] || 0;
+    const longEdge = Math.max(w, h);
+    if (longEdge > 0) candidates.push({ url, longEdge });
+  }
+  if (!candidates.length) {
+    // Extras missing — fall back to a constructed _b URL (always available).
+    return `https://live.staticflickr.com/${photo.server}/${photo.id}_${photo.secret}_b.jpg`;
+  }
+  candidates.sort((a, b) => a.longEdge - b.longEdge);
+  const big = candidates.find((c) => c.longEdge >= target);
+  return (big || candidates[candidates.length - 1]).url;
+}
+
 // Timestamp (performance.now ms) until which click events should be
 // ignored. Set by the long-press handlers after a pulse/commit fires so
 // the trailing click from finger-release does NOT also draw a card.
@@ -187,6 +229,7 @@ async function fetchRandomFlickrUrl(event) {
       max_upload_date: String(maxSec),
       per_page: String(FLICKR_PER_PAGE),
       page: "1",
+      extras: FLICKR_EXTRAS,
       format: "json",
       nojsoncallback: "1",
     });
@@ -202,9 +245,11 @@ async function fetchRandomFlickrUrl(event) {
       const photos = body?.photos?.photo ?? [];
       if (!photos.length) continue;
       const p = photos[await rng(photos.length)];
-      // "_b" suffix = 1024px on the long edge: large enough for a full-
-      // viewport portrait without overpaying on bandwidth.
-      return `https://live.staticflickr.com/${p.server}/${p.id}_${p.secret}_b.jpg`;
+      // Pick the smallest Flickr-hosted size whose long edge covers this
+      // device's card box. Saves bandwidth on phones, avoids upscaling on
+      // retina desktops. Falls back to a constructed _b URL if the photo
+      // didn't come back with any size extras.
+      return pickBestSizeUrl(p, CARD_TARGET_PX);
     } catch (_e) {
       // Try the next random day; transient network errors shouldn't strand
       // the user on a frozen back.
