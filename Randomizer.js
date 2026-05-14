@@ -13,22 +13,118 @@ function preloadImage(url) {
   });
 }
 
-async function pickRandomIndex(max) {
-  // max is exclusive. Try random.org (atmospheric noise); fall back to Math.random.
-  const url = `https://www.random.org/integers/?num=1&min=0&max=${max - 1}&col=1&base=10&format=plain&rnd=new`;
+// --- Entropy sources ----------------------------------------------------
+// The draw is composed of (a) a strong cosmic source and (b) the querent's
+// gesture — when and where they reached for the card. The two are mixed
+// through SHA-256 so the resulting index inherits the entropy of the
+// strongest input. This is the digital analogue of cutting the deck:
+// the universe offers the cards; your hand chooses the moment.
+
+// ANU's quantum vacuum-fluctuation RNG. Key is in plaintext JS, which is
+// fine for a public tarot app — worst case the free quota burns and we
+// fall back. Don't reuse this key for anything that matters.
+const ANU_KEY = "FREE_qrng-key_1778780851";
+const ANU_URL = "https://api.quantumnumbers.anu.edu.au?length=8&type=uint8";
+
+async function fetchANUBytes() {
+  const res = await fetch(ANU_URL, {
+    headers: { "x-api-key": ANU_KEY },
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("ANU HTTP " + res.status);
+  const json = await res.json();
+  if (!json.success || !Array.isArray(json.data)) {
+    throw new Error("ANU returned no data");
+  }
+  return new Uint8Array(json.data);
+}
+
+async function fetchRandomOrgBytes() {
+  // 8 bytes (0–255) as a fallback strong source.
+  const url = "https://www.random.org/integers/?num=8&min=0&max=255&col=1&base=10&format=plain&rnd=new";
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error("random.org HTTP " + res.status);
+  const nums = (await res.text())
+    .trim()
+    .split(/\s+/)
+    .map((s) => parseInt(s, 10));
+  if (nums.length !== 8 || nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+    throw new Error("bad bytes from random.org");
+  }
+  return new Uint8Array(nums);
+}
+
+async function getCosmicBytes() {
   try {
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) throw new Error("random.org HTTP " + res.status);
-    const n = parseInt((await res.text()).trim(), 10);
-    if (!Number.isInteger(n) || n < 0 || n >= max) throw new Error("bad value from random.org");
-    return n;
-  } catch (err) {
-    console.warn("random.org failed, using Math.random fallback:", err);
-    return Math.floor(Math.random() * max);
+    return { bytes: await fetchANUBytes(), source: "ANU" };
+  } catch (e1) {
+    console.warn("ANU unavailable, trying random.org:", e1);
+    try {
+      return { bytes: await fetchRandomOrgBytes(), source: "random.org" };
+    } catch (e2) {
+      console.warn("random.org also unavailable, falling back to Math.random:", e2);
+      const bytes = new Uint8Array(8);
+      crypto.getRandomValues(bytes); // browser CSPRNG; better than Math.random
+      return { bytes, source: "crypto.getRandomValues" };
+    }
   }
 }
 
-async function newPage() {
+// Pack the gesture (when + where + the event's high-resolution timestamp)
+// into bytes. Float64 of performance.now() preserves sub-millisecond bits;
+// clientX/Y are screen-position entropy.
+function encodeGesture(event) {
+  const buf = new ArrayBuffer(8 + 8 + 4 + 4);
+  const view = new DataView(buf);
+  view.setFloat64(0, performance.now(), true);
+  view.setFloat64(8, event && event.timeStamp != null ? event.timeStamp : 0, true);
+  view.setInt32(16, event && event.clientX != null ? event.clientX : 0, true);
+  view.setInt32(20, event && event.clientY != null ? event.clientY : 0, true);
+  return new Uint8Array(buf);
+}
+
+function concatBytes(a, b) {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
+}
+
+// Reject any candidate that would bias the mod operation, so every card
+// has exactly equal probability. With 78 outcomes and a 32-bit candidate
+// the rejection rate is ~10⁻⁹ — effectively never — but doing this right
+// is cheap and removes a footgun.
+function unbiasedIndex(uint32, max) {
+  const limit = Math.floor(0x100000000 / max) * max;
+  return uint32 < limit ? uint32 % max : null;
+}
+
+async function pickRandomIndex(max, event) {
+  // Mix cosmic bytes with the gesture via SHA-256. If by some astronomical
+  // bad luck the first 4 bytes fall in the bias zone, re-hash with a
+  // counter byte appended and try again.
+  const cosmic = await getCosmicBytes();
+  const gesture = encodeGesture(event);
+  let counter = 0;
+  while (true) {
+    const counterByte = new Uint8Array([counter]);
+    const material = concatBytes(concatBytes(cosmic.bytes, gesture), counterByte);
+    const digest = await crypto.subtle.digest("SHA-256", material);
+    const uint32 = new DataView(digest).getUint32(0, false);
+    const idx = unbiasedIndex(uint32, max);
+    if (idx !== null) {
+      console.debug(`draw: source=${cosmic.source}, index=${idx}`);
+      return idx;
+    }
+    counter++;
+    if (counter > 16) {
+      // Defensive — should never happen.
+      return uint32 % max;
+    }
+  }
+}
+
+async function newPage(event) {
   // 78 external card images from learntarot.com:
   const allCards = [
     "https://www.learntarot.com/bigjpgs/maj00.jpg",
@@ -122,7 +218,7 @@ async function newPage() {
 
   // Draw the index (random.org with Math.random fallback) and preload the
   // chosen image so the reveal doesn't stall on a slow JPG.
-  const randomIndex = await pickRandomIndex(allCards.length);
+  const randomIndex = await pickRandomIndex(allCards.length, event);
   const chosenUrl = allCards[randomIndex];
   await preloadImage(chosenUrl);
 
