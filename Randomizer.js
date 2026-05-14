@@ -2,10 +2,12 @@
 // a beat of consideration rather than a snap.
 const MIN_HOLD_MS = 260;
 
-// ANU free tier is ~1 request per 60 seconds. After every successful ANU
-// draw we disarm the card for this long; if ANU returns 429 with a
-// Retry-After header, we honor that instead.
-const ANU_COOLDOWN_MS = 60_000;
+// NIST publishes a fresh quantum-sourced pulse every 60 seconds. The
+// cooldown is computed dynamically from the pulse's timestamp so the card
+// re-arms the moment the *next* pulse is due, not a fixed interval after
+// the click.
+const NIST_PULSE_INTERVAL_MS = 60_000;
+const NIST_MIN_COOLDOWN_MS = 4_000; // safety floor for clock skew
 
 let drawing = false;
 
@@ -53,29 +55,31 @@ function renderDebugOverlay(telem) {
     document.body.appendChild(el);
   }
 
-  const anu = telem.anu || {};
+  const nist = telem.nist || {};
   const ro = telem.randomOrg || {};
   const g = telem.gesture || {};
 
-  const sourceLabel = telem.cosmicSource === "ANU"
-    ? "ANU (quantum vacuum)"
+  const sourceLabel = telem.cosmicSource === "NIST"
+    ? "NIST Beacon (two independent QRNGs)"
     : telem.cosmicSource === "random.org"
       ? "random.org (atmospheric)"
       : "crypto.getRandomValues (local)";
-  const sourceBadge = telem.cosmicSource === "ANU" ? "✓ QUANTUM" : "⚠ FALLBACK";
+  const sourceBadge = telem.cosmicSource === "NIST" ? "✓ QUANTUM" : "⚠ FALLBACK";
 
   const lines = [
     `DRAW #${telem.drawNumber}  ${telem.startedAt.replace("T", " ").replace(/\..*/, "")}Z`,
     ``,
     `  source        ${sourceLabel}    ${sourceBadge}`,
     ``,
-    `  ANU`,
-    `    attempted   ${anu.attempted ? "yes" : "no"}`,
-    `    ok          ${anu.ok === undefined ? "—" : anu.ok ? "yes" : "NO"}`,
-    `    httpStatus  ${anu.httpStatus ?? "—"}`,
-    `    latency     ${fmtMs(anu.latencyMs)}`,
-    `    rateLimited ${anu.rateLimited ? "YES (retry " + Math.round((anu.retryAfterMs || 0) / 1000) + "s)" : "no"}`,
-    `    error       ${anu.error || "—"}`,
+    `  NIST Beacon`,
+    `    attempted        ${nist.attempted ? "yes" : "no"}`,
+    `    ok               ${nist.ok === undefined ? "—" : nist.ok ? "yes" : "NO"}`,
+    `    httpStatus       ${nist.httpStatus ?? "—"}`,
+    `    latency          ${fmtMs(nist.latencyMs)}`,
+    `    pulseIndex       ${nist.pulseIndex ?? "—"}`,
+    `    pulseTimeStamp   ${nist.pulseTimeStamp || "—"}`,
+    `    pulseAge         ${nist.pulseAgeMs != null ? (nist.pulseAgeMs / 1000).toFixed(1) + " s" : "—"}`,
+    `    error            ${nist.error || "—"}`,
     ``,
     (ro.attempted ? [
       `  random.org (fallback)`,
@@ -122,50 +126,57 @@ function preloadImage(url) {
 // strongest input. This is the digital analogue of cutting the deck:
 // the universe offers the cards; your hand chooses the moment.
 
-// ANU's quantum vacuum-fluctuation RNG. Key is in plaintext JS, which is
-// fine for a public tarot app — worst case the free quota burns and we
-// fall back. Don't reuse this key for anything that matters.
-const ANU_KEY = "FREE_qrng-key_1778780851";
-const ANU_URL = "https://api.quantumnumbers.anu.edu.au?length=8&type=uint8";
+// NIST's public Randomness Beacon. Each pulse combines two independent
+// commercial quantum RNGs (different physical principles, different
+// vendors), is cryptographically signed by NIST, and is published every
+// 60 seconds. No key, CORS-enabled, free. https://beacon.nist.gov
+const NIST_BEACON_URL = "https://beacon.nist.gov/beacon/2.0/pulse/last";
 
-function rateLimitError(retryAfterMs) {
-  const err = new Error("ANU rate limited");
-  err.rateLimited = true;
-  err.retryAfterMs = retryAfterMs;
-  return err;
+function hexToBytes(hex, count) {
+  const out = new Uint8Array(count);
+  for (let i = 0; i < count; i++) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
 }
 
-async function fetchANUBytes(telem) {
+async function fetchNISTBeacon(telem) {
   const t0 = performance.now();
-  telem.anu = { attempted: true };
+  telem.nist = { attempted: true };
   try {
-    const res = await fetch(ANU_URL, {
-      headers: { "x-api-key": ANU_KEY },
-      cache: "no-store",
-    });
-    telem.anu.httpStatus = res.status;
-    if (res.status === 429) {
-      const ra = parseInt(res.headers.get("Retry-After") || "", 10);
-      throw rateLimitError(Number.isFinite(ra) ? ra * 1000 : ANU_COOLDOWN_MS);
-    }
-    if (!res.ok) throw new Error("ANU HTTP " + res.status);
+    const res = await fetch(NIST_BEACON_URL, { cache: "no-store" });
+    telem.nist.httpStatus = res.status;
+    if (!res.ok) throw new Error("NIST HTTP " + res.status);
     const json = await res.json();
-    telem.anu.body = json;
-    if (!json.success) {
-      const msg = (json.message || "").toString();
-      if (/rate|limit|quota|exceed/i.test(msg)) throw rateLimitError(ANU_COOLDOWN_MS);
-      throw new Error("ANU error: " + (msg || "unknown"));
+    const pulse = json && json.pulse;
+    if (!pulse || typeof pulse.outputValue !== "string") {
+      throw new Error("NIST returned no pulse");
     }
-    if (!Array.isArray(json.data)) throw new Error("ANU returned no data");
-    telem.anu.ok = true;
-    telem.anu.latencyMs = performance.now() - t0;
-    return new Uint8Array(json.data);
+
+    // outputValue is a 512-bit (128 hex-char) value — the canonical pulse
+    // output. We use the first 8 bytes; they're already mixed inside NIST
+    // via SHA-512 of independent quantum sources.
+    const bytes = hexToBytes(pulse.outputValue, 8);
+
+    const pulseEpochMs = new Date(pulse.timeStamp).getTime();
+    const nextPulseEpochMs = pulseEpochMs + NIST_PULSE_INTERVAL_MS;
+    const cooldownMs = Math.max(
+      NIST_MIN_COOLDOWN_MS,
+      nextPulseEpochMs - Date.now()
+    );
+
+    telem.nist.ok = true;
+    telem.nist.latencyMs = performance.now() - t0;
+    telem.nist.pulseIndex = pulse.pulseIndex;
+    telem.nist.pulseTimeStamp = pulse.timeStamp;
+    telem.nist.pulseAgeMs = Date.now() - pulseEpochMs;
+    telem.nist.cooldownMs = cooldownMs;
+
+    return { bytes, cooldownMs };
   } catch (e) {
-    telem.anu.ok = false;
-    telem.anu.latencyMs = performance.now() - t0;
-    telem.anu.error = e.message;
-    telem.anu.rateLimited = !!e.rateLimited;
-    if (e.rateLimited) telem.anu.retryAfterMs = e.retryAfterMs;
+    telem.nist.ok = false;
+    telem.nist.latencyMs = performance.now() - t0;
+    telem.nist.error = e.message;
     throw e;
   }
 }
@@ -195,26 +206,19 @@ async function fetchRandomOrgBytes(telem) {
 
 async function getCosmicBytes(telem) {
   try {
-    const bytes = await fetchANUBytes(telem);
-    return { bytes, source: "ANU", cooldownMs: ANU_COOLDOWN_MS };
-  } catch (e1) {
-    const rateLimited = !!e1.rateLimited;
+    const { bytes, cooldownMs } = await fetchNISTBeacon(telem);
+    return { bytes, source: "NIST", cooldownMs };
+  } catch (_e1) {
     try {
       const bytes = await fetchRandomOrgBytes(telem);
-      return {
-        bytes,
-        source: "random.org",
-        cooldownMs: rateLimited ? e1.retryAfterMs : 0,
-      };
-    } catch (e2) {
+      // If NIST is down (network/CORS) we don't really know when it'll be
+      // back; use a 30s holding cooldown so we don't hammer it.
+      return { bytes, source: "random.org", cooldownMs: 30_000 };
+    } catch (_e2) {
       telem.cryptoFallback = true;
       const bytes = new Uint8Array(8);
       crypto.getRandomValues(bytes);
-      return {
-        bytes,
-        source: "crypto.getRandomValues",
-        cooldownMs: rateLimited ? e1.retryAfterMs : 0,
-      };
+      return { bytes, source: "crypto.getRandomValues", cooldownMs: 0 };
     }
   }
 }
