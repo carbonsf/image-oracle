@@ -2,6 +2,10 @@
 // a beat of consideration rather than a snap.
 const MIN_HOLD_MS = 260;
 
+// Long-press reshuffle timings.
+const PRESS_PULSE_MS = 600;     // when the charge-up pulse begins
+const PRESS_COMMIT_MS = 1500;   // when the reshuffle commits
+
 // Re-entrancy guard: ignore a click while a draw or reset is mid-flight.
 let drawing = false;
 
@@ -11,11 +15,101 @@ let showingBack = true;
 
 const BACK_SRC = "RoseLilyRed.jpg";
 
-// Subtle tactile beat at the moment of reveal / set-down. Feature-detected
-// because navigator.vibrate is undefined on iOS Safari and many desktops;
-// where present-but-no-hardware (most desktops), the call is a silent
-// no-op per spec. Already inside a user-gesture handler, so policy gates
-// won't block it.
+// 78 external card images from learntarot.com.
+const ALL_CARDS = [
+  "https://www.learntarot.com/bigjpgs/maj00.jpg",
+  "https://www.learntarot.com/bigjpgs/maj01.jpg",
+  "https://www.learntarot.com/bigjpgs/maj02.jpg",
+  "https://www.learntarot.com/bigjpgs/maj03.jpg",
+  "https://www.learntarot.com/bigjpgs/maj04.jpg",
+  "https://www.learntarot.com/bigjpgs/maj05.jpg",
+  "https://www.learntarot.com/bigjpgs/maj06.jpg",
+  "https://www.learntarot.com/bigjpgs/maj07.jpg",
+  "https://www.learntarot.com/bigjpgs/maj08.jpg",
+  "https://www.learntarot.com/bigjpgs/maj09.jpg",
+  "https://www.learntarot.com/bigjpgs/maj10.jpg",
+  "https://www.learntarot.com/bigjpgs/maj11.jpg",
+  "https://www.learntarot.com/bigjpgs/maj12.jpg",
+  "https://www.learntarot.com/bigjpgs/maj13.jpg",
+  "https://www.learntarot.com/bigjpgs/maj14.jpg",
+  "https://www.learntarot.com/bigjpgs/maj15.jpg",
+  "https://www.learntarot.com/bigjpgs/maj16.jpg",
+  "https://www.learntarot.com/bigjpgs/maj17.jpg",
+  "https://www.learntarot.com/bigjpgs/maj18.jpg",
+  "https://www.learntarot.com/bigjpgs/maj19.jpg",
+  "https://www.learntarot.com/bigjpgs/maj20.jpg",
+  "https://www.learntarot.com/bigjpgs/maj21.jpg",
+  "https://www.learntarot.com/bigjpgs/wands01.jpg",
+  "https://www.learntarot.com/bigjpgs/wands02.jpg",
+  "https://www.learntarot.com/bigjpgs/wands03.jpg",
+  "https://www.learntarot.com/bigjpgs/wands04.jpg",
+  "https://www.learntarot.com/bigjpgs/wands05.jpg",
+  "https://www.learntarot.com/bigjpgs/wands06.jpg",
+  "https://www.learntarot.com/bigjpgs/wands07.jpg",
+  "https://www.learntarot.com/bigjpgs/wands08.jpg",
+  "https://www.learntarot.com/bigjpgs/wands09.jpg",
+  "https://www.learntarot.com/bigjpgs/wands10.jpg",
+  "https://www.learntarot.com/bigjpgs/wands11.jpg",
+  "https://www.learntarot.com/bigjpgs/wands12.jpg",
+  "https://www.learntarot.com/bigjpgs/wands13.jpg",
+  "https://www.learntarot.com/bigjpgs/wands14.jpg",
+  "https://www.learntarot.com/bigjpgs/cups01.jpg",
+  "https://www.learntarot.com/bigjpgs/cups02.jpg",
+  "https://www.learntarot.com/bigjpgs/cups03.jpg",
+  "https://www.learntarot.com/bigjpgs/cups04.jpg",
+  "https://www.learntarot.com/bigjpgs/cups05.jpg",
+  "https://www.learntarot.com/bigjpgs/cups06.jpg",
+  "https://www.learntarot.com/bigjpgs/cups07.jpg",
+  "https://www.learntarot.com/bigjpgs/cups08.jpg",
+  "https://www.learntarot.com/bigjpgs/cups09.jpg",
+  "https://www.learntarot.com/bigjpgs/cups10.jpg",
+  "https://www.learntarot.com/bigjpgs/cups11.jpg",
+  "https://www.learntarot.com/bigjpgs/cups12.jpg",
+  "https://www.learntarot.com/bigjpgs/cups13.jpg",
+  "https://www.learntarot.com/bigjpgs/cups14.jpg",
+  "https://www.learntarot.com/bigjpgs/swords01.jpg",
+  "https://www.learntarot.com/bigjpgs/swords02.jpg",
+  "https://www.learntarot.com/bigjpgs/swords03.jpg",
+  "https://www.learntarot.com/bigjpgs/swords04.jpg",
+  "https://www.learntarot.com/bigjpgs/swords05.jpg",
+  "https://www.learntarot.com/bigjpgs/swords06.jpg",
+  "https://www.learntarot.com/bigjpgs/swords07.jpg",
+  "https://www.learntarot.com/bigjpgs/swords08.jpg",
+  "https://www.learntarot.com/bigjpgs/swords09.jpg",
+  "https://www.learntarot.com/bigjpgs/swords10.jpg",
+  "https://www.learntarot.com/bigjpgs/swords11.jpg",
+  "https://www.learntarot.com/bigjpgs/swords12.jpg",
+  "https://www.learntarot.com/bigjpgs/swords13.jpg",
+  "https://www.learntarot.com/bigjpgs/swords14.jpg",
+  "https://www.learntarot.com/bigjpgs/pents01.jpg",
+  "https://www.learntarot.com/bigjpgs/pents02.jpg",
+  "https://www.learntarot.com/bigjpgs/pents03.jpg",
+  "https://www.learntarot.com/bigjpgs/pents04.jpg",
+  "https://www.learntarot.com/bigjpgs/pents05.jpg",
+  "https://www.learntarot.com/bigjpgs/pents06.jpg",
+  "https://www.learntarot.com/bigjpgs/pents07.jpg",
+  "https://www.learntarot.com/bigjpgs/pents08.jpg",
+  "https://www.learntarot.com/bigjpgs/pents09.jpg",
+  "https://www.learntarot.com/bigjpgs/pents10.jpg",
+  "https://www.learntarot.com/bigjpgs/pents11.jpg",
+  "https://www.learntarot.com/bigjpgs/pents12.jpg",
+  "https://www.learntarot.com/bigjpgs/pents13.jpg",
+  "https://www.learntarot.com/bigjpgs/pents14.jpg"
+];
+
+// --- Deck state: draw-without-replacement -----------------------------
+// `deck` is the set of card indices not yet drawn this shuffle. When it
+// empties we reshuffle (auto, with a brief settle animation) or when the
+// querent long-presses the back (manual).
+function freshDeck() {
+  return Array.from({ length: ALL_CARDS.length }, (_, i) => i);
+}
+let deck = freshDeck();
+
+// Subtle tactile beat. Feature-detected because navigator.vibrate is
+// undefined on iOS Safari and many desktops; where present-but-no-hardware
+// (most desktops), the call is a silent no-op per spec. We are always
+// already inside a user-gesture handler, so policy gates won't block it.
 function haptic(ms) {
   if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
     try { navigator.vibrate(ms); } catch (_e) { /* ignore */ }
@@ -112,9 +206,7 @@ function concatBytes(a, b) {
 }
 
 // Reject any candidate that would bias the mod operation, so every card
-// has exactly equal probability. With 78 outcomes and a 32-bit candidate
-// the rejection rate is ~10⁻⁹ — effectively never — but doing this right
-// is cheap and removes a footgun.
+// has exactly equal probability.
 function unbiasedIndex(uint32, max) {
   const limit = Math.floor(0x100000000 / max) * max;
   return uint32 < limit ? uint32 % max : null;
@@ -137,117 +229,42 @@ async function pickRandomIndex(max, event) {
   }
 }
 
+// --- Draw / reset orchestration ----------------------------------------
+
 async function newPage(event) {
-  // 78 external card images from learntarot.com:
-  const allCards = [
-    "https://www.learntarot.com/bigjpgs/maj00.jpg",
-    "https://www.learntarot.com/bigjpgs/maj01.jpg",
-    "https://www.learntarot.com/bigjpgs/maj02.jpg",
-    "https://www.learntarot.com/bigjpgs/maj03.jpg",
-    "https://www.learntarot.com/bigjpgs/maj04.jpg",
-    "https://www.learntarot.com/bigjpgs/maj05.jpg",
-    "https://www.learntarot.com/bigjpgs/maj06.jpg",
-    "https://www.learntarot.com/bigjpgs/maj07.jpg",
-    "https://www.learntarot.com/bigjpgs/maj08.jpg",
-    "https://www.learntarot.com/bigjpgs/maj09.jpg",
-    "https://www.learntarot.com/bigjpgs/maj10.jpg",
-    "https://www.learntarot.com/bigjpgs/maj11.jpg",
-    "https://www.learntarot.com/bigjpgs/maj12.jpg",
-    "https://www.learntarot.com/bigjpgs/maj13.jpg",
-    "https://www.learntarot.com/bigjpgs/maj14.jpg",
-    "https://www.learntarot.com/bigjpgs/maj15.jpg",
-    "https://www.learntarot.com/bigjpgs/maj16.jpg",
-    "https://www.learntarot.com/bigjpgs/maj17.jpg",
-    "https://www.learntarot.com/bigjpgs/maj18.jpg",
-    "https://www.learntarot.com/bigjpgs/maj19.jpg",
-    "https://www.learntarot.com/bigjpgs/maj20.jpg",
-    "https://www.learntarot.com/bigjpgs/maj21.jpg",
-    "https://www.learntarot.com/bigjpgs/wands01.jpg",
-    "https://www.learntarot.com/bigjpgs/wands02.jpg",
-    "https://www.learntarot.com/bigjpgs/wands03.jpg",
-    "https://www.learntarot.com/bigjpgs/wands04.jpg",
-    "https://www.learntarot.com/bigjpgs/wands05.jpg",
-    "https://www.learntarot.com/bigjpgs/wands06.jpg",
-    "https://www.learntarot.com/bigjpgs/wands07.jpg",
-    "https://www.learntarot.com/bigjpgs/wands08.jpg",
-    "https://www.learntarot.com/bigjpgs/wands09.jpg",
-    "https://www.learntarot.com/bigjpgs/wands10.jpg",
-    "https://www.learntarot.com/bigjpgs/wands11.jpg",
-    "https://www.learntarot.com/bigjpgs/wands12.jpg",
-    "https://www.learntarot.com/bigjpgs/wands13.jpg",
-    "https://www.learntarot.com/bigjpgs/wands14.jpg",
-    "https://www.learntarot.com/bigjpgs/cups01.jpg",
-    "https://www.learntarot.com/bigjpgs/cups02.jpg",
-    "https://www.learntarot.com/bigjpgs/cups03.jpg",
-    "https://www.learntarot.com/bigjpgs/cups04.jpg",
-    "https://www.learntarot.com/bigjpgs/cups05.jpg",
-    "https://www.learntarot.com/bigjpgs/cups06.jpg",
-    "https://www.learntarot.com/bigjpgs/cups07.jpg",
-    "https://www.learntarot.com/bigjpgs/cups08.jpg",
-    "https://www.learntarot.com/bigjpgs/cups09.jpg",
-    "https://www.learntarot.com/bigjpgs/cups10.jpg",
-    "https://www.learntarot.com/bigjpgs/cups11.jpg",
-    "https://www.learntarot.com/bigjpgs/cups12.jpg",
-    "https://www.learntarot.com/bigjpgs/cups13.jpg",
-    "https://www.learntarot.com/bigjpgs/cups14.jpg",
-    "https://www.learntarot.com/bigjpgs/swords01.jpg",
-    "https://www.learntarot.com/bigjpgs/swords02.jpg",
-    "https://www.learntarot.com/bigjpgs/swords03.jpg",
-    "https://www.learntarot.com/bigjpgs/swords04.jpg",
-    "https://www.learntarot.com/bigjpgs/swords05.jpg",
-    "https://www.learntarot.com/bigjpgs/swords06.jpg",
-    "https://www.learntarot.com/bigjpgs/swords07.jpg",
-    "https://www.learntarot.com/bigjpgs/swords08.jpg",
-    "https://www.learntarot.com/bigjpgs/swords09.jpg",
-    "https://www.learntarot.com/bigjpgs/swords10.jpg",
-    "https://www.learntarot.com/bigjpgs/swords11.jpg",
-    "https://www.learntarot.com/bigjpgs/swords12.jpg",
-    "https://www.learntarot.com/bigjpgs/swords13.jpg",
-    "https://www.learntarot.com/bigjpgs/swords14.jpg",
-    "https://www.learntarot.com/bigjpgs/pents01.jpg",
-    "https://www.learntarot.com/bigjpgs/pents02.jpg",
-    "https://www.learntarot.com/bigjpgs/pents03.jpg",
-    "https://www.learntarot.com/bigjpgs/pents04.jpg",
-    "https://www.learntarot.com/bigjpgs/pents05.jpg",
-    "https://www.learntarot.com/bigjpgs/pents06.jpg",
-    "https://www.learntarot.com/bigjpgs/pents07.jpg",
-    "https://www.learntarot.com/bigjpgs/pents08.jpg",
-    "https://www.learntarot.com/bigjpgs/pents09.jpg",
-    "https://www.learntarot.com/bigjpgs/pents10.jpg",
-    "https://www.learntarot.com/bigjpgs/pents11.jpg",
-    "https://www.learntarot.com/bigjpgs/pents12.jpg",
-    "https://www.learntarot.com/bigjpgs/pents13.jpg",
-    "https://www.learntarot.com/bigjpgs/pents14.jpg"
-  ];
-
   const imgEl = document.querySelector("img");
-
-  // Ignore a click while a draw or reset is mid-flight.
   if (drawing) return;
   drawing = true;
 
   if (showingBack) {
-    await drawCard(imgEl, event, allCards);
+    await drawCard(imgEl, event);
   } else {
     await setDownToBack(imgEl);
   }
 }
 
 // "Breath": dim + recede, fetch entropy, swap to the chosen card, fade up.
-async function drawCard(imgEl, event, allCards) {
+async function drawCard(imgEl, event) {
+  // If the deck is exhausted, play the settle (auto-reshuffle) first so
+  // the moment is honored visually, then proceed with the draw.
+  if (deck.length === 0) {
+    await playSettle(imgEl);
+    deck = freshDeck();
+  }
+
   imgEl.classList.add("dimmed");
   const holdUntil = performance.now() + MIN_HOLD_MS;
 
-  // Mix cosmic bytes with the gesture, preload the chosen image so the
-  // reveal doesn't stall on a slow JPG.
-  const idx = await pickRandomIndex(allCards.length, event);
-  const chosenUrl = allCards[idx];
+  // Pick from the remaining deck and splice the chosen card out.
+  const pickAt = await pickRandomIndex(deck.length, event);
+  const cardIdx = deck.splice(pickAt, 1)[0];
+  const chosenUrl = ALL_CARDS[cardIdx];
   await preloadImage(chosenUrl);
 
   // Honor a minimum hold so the transition has rhythm even on cache hits.
-  const remaining = holdUntil - performance.now();
-  if (remaining > 0) {
-    await new Promise((r) => setTimeout(r, remaining));
+  const holdRemaining = holdUntil - performance.now();
+  if (holdRemaining > 0) {
+    await new Promise((r) => setTimeout(r, holdRemaining));
   }
 
   // Swap the source while still dimmed (any flash is masked by low opacity),
@@ -265,18 +282,13 @@ async function drawCard(imgEl, event, allCards) {
 // the back, which fades in crisply. Qualitatively different from the draw
 // (vertical, not depth; firmer easing; no scale).
 async function setDownToBack(imgEl) {
-  // Make sure the back is in cache before we start the motion, so the
-  // swap is instant and the fade-in is smooth.
   await preloadImage(BACK_SRC);
 
   imgEl.classList.add("resetting");
   await new Promise((r) => setTimeout(r, 300));
 
-  // Now invisible — swap to the back without a visible flash.
   imgEl.src = BACK_SRC;
 
-  // Next frame: drop the .resetting class, letting the back fade back in
-  // from opacity 0 / translateY(6px) → 1 / 0 via the same transition.
   requestAnimationFrame(() => {
     imgEl.classList.remove("resetting");
     haptic(4); // a quieter beat — the card is placed
@@ -284,3 +296,127 @@ async function setDownToBack(imgEl) {
     setTimeout(() => { drawing = false; }, 300);
   });
 }
+
+// Play the settle animation once (used at both auto- and manual-reshuffle
+// commit). 500ms matches the deckSettle keyframe duration in the CSS.
+function playSettle(imgEl) {
+  return new Promise((resolve) => {
+    imgEl.classList.add("settling");
+    setTimeout(() => {
+      imgEl.classList.remove("settling");
+      resolve();
+    }, 500);
+  });
+}
+
+// --- Long-press reshuffle ---------------------------------------------
+// State machine driven by pointer events. A press on the back starts a
+// 600ms timer; if released before that, it falls through to a normal
+// tap-to-draw. After 600ms a charging pulse begins. After 1500ms total
+// the reshuffle commits (settle animation + deck reset). Releasing
+// during the pulse aborts cleanly — no draw, no reshuffle.
+
+let pressPulseTimer = null;
+let pressCommitTimer = null;
+let pressPhase = "idle"; // "idle" | "pending" | "charging" | "committed"
+
+function clearPressTimers() {
+  if (pressPulseTimer) { clearTimeout(pressPulseTimer); pressPulseTimer = null; }
+  if (pressCommitTimer) { clearTimeout(pressCommitTimer); pressCommitTimer = null; }
+}
+
+function onPointerDown(event) {
+  // Only the back accepts the long-press; ignore otherwise.
+  if (!showingBack || drawing) return;
+  // Stop iOS from doing image callouts and selection.
+  event.preventDefault();
+
+  pressPhase = "pending";
+  clearPressTimers();
+
+  const imgEl = event.currentTarget;
+  pressPulseTimer = setTimeout(() => {
+    if (pressPhase !== "pending") return;
+    pressPhase = "charging";
+    imgEl.classList.add("charging");
+    haptic(4);
+
+    pressCommitTimer = setTimeout(() => {
+      if (pressPhase !== "charging") return;
+      pressPhase = "committed";
+      imgEl.classList.remove("charging");
+      haptic(12);
+      // Commit: settle + reset deck. Use the same flag as draws so a tap
+      // during the settle doesn't double-fire.
+      drawing = true;
+      playSettle(imgEl).then(() => {
+        deck = freshDeck();
+        drawing = false;
+        pressPhase = "idle";
+      });
+    }, PRESS_COMMIT_MS - PRESS_PULSE_MS);
+  }, PRESS_PULSE_MS);
+}
+
+function onPointerEnd(event) {
+  const imgEl = event.currentTarget;
+
+  if (pressPhase === "pending") {
+    // Released before the pulse began — treat as a normal tap.
+    clearPressTimers();
+    pressPhase = "idle";
+    newPage(event);
+    return;
+  }
+
+  if (pressPhase === "charging") {
+    // Released during the pulse — abort. No draw, no reshuffle.
+    clearPressTimers();
+    imgEl.classList.remove("charging");
+    pressPhase = "idle";
+    return;
+  }
+
+  if (pressPhase === "committed") {
+    // Commit already fired; nothing to do on release.
+    return;
+  }
+
+  // idle — pointerdown was on a face-up card. Let the click path handle it.
+  if (!showingBack) {
+    newPage(event);
+  }
+}
+
+function onPointerCancel() {
+  // Lost the pointer (system gesture, tab switch, etc). Always abort.
+  if (pressPhase === "charging") {
+    const imgEl = document.querySelector("img");
+    if (imgEl) imgEl.classList.remove("charging");
+  }
+  clearPressTimers();
+  // If a commit is already in flight we let it finish; otherwise reset.
+  if (pressPhase !== "committed") pressPhase = "idle";
+}
+
+function wireImageHandlers() {
+  const imgEl = document.querySelector("img");
+  if (!imgEl) return;
+  imgEl.addEventListener("pointerdown", onPointerDown);
+  imgEl.addEventListener("pointerup", onPointerEnd);
+  imgEl.addEventListener("pointerleave", onPointerCancel);
+  imgEl.addEventListener("pointercancel", onPointerCancel);
+  imgEl.addEventListener("contextmenu", (e) => e.preventDefault());
+}
+
+// Script is loaded at the end of <body>, so the <img> usually exists by
+// now. Handle both cases for safety.
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", wireImageHandlers);
+} else {
+  wireImageHandlers();
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) onPointerCancel();
+});
