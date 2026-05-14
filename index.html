@@ -17,21 +17,19 @@
     }
 
     /* The card is sized to the back image's aspect ratio (825/1427 ≈ 0.578)
-       and centered in the viewport. object-fit: cover means the back fills
-       the box exactly, and any Flickr photo drawn into the same <img> is
-       centrally cropped to the same card silhouette regardless of its own
-       aspect ratio. 100dvh handles mobile Safari's collapsing URL bar. */
+       and centered in the viewport. We set width AND height explicitly via
+       viewport math (rather than relying on `aspect-ratio`, which is
+       overridden by the image's intrinsic aspect on a replaced element) so
+       the box is always card-shaped regardless of the source. object-fit:
+       cover then centrally crops any Flickr photo to the same silhouette.
+       100dvh handles mobile Safari's collapsing URL bar. */
     img {
       display: block;
-      aspect-ratio: 825 / 1427;
-      width: auto;
-      height: auto;
-      max-width: 100vw;
-      max-height: 100vh;
-      max-height: 100dvh;
       position: absolute;
       inset: 0;
       margin: auto;
+      width: min(100vw, calc(100dvh * 825 / 1427));
+      height: min(100dvh, calc(100vw * 1427 / 825));
       object-fit: cover;
       cursor: pointer;
       transition:
