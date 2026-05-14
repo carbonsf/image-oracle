@@ -21,10 +21,12 @@ function freshDeck() {
 }
 let deck = freshDeck();
 
-// Set true by the long-press handlers when the gesture should NOT also
-// fire a tap-draw on release. Consumed (cleared) by the next newPage call
-// regardless of outcome.
-let consumeNextClick = false;
+// Timestamp (performance.now ms) until which click events should be
+// ignored. Set by the long-press handlers after a pulse/commit fires so
+// the trailing click from finger-release does NOT also draw a card.
+// Time-based (not flag-based) so it works regardless of whether the
+// click event fires before or after touchend on a given browser.
+let suppressClicksUntil = 0;
 
 // Subtle tactile beat at the moment of reveal / set-down. Feature-detected
 // because navigator.vibrate is undefined on iOS Safari and many desktops;
@@ -154,8 +156,10 @@ async function pickRandomIndex(max, event) {
 
 async function newPage(event) {
   // If the long-press just fired a reshuffle (or aborted past the pulse
-  // threshold), swallow the trailing click so we don't immediately draw.
-  if (consumeNextClick) { consumeNextClick = false; return; }
+  // threshold), the trailing click should NOT draw a card. We gate on a
+  // timestamp set by the long-press handlers, robust to whether `click`
+  // fires before or after `touchend` on a given browser.
+  if (performance.now() < suppressClicksUntil) return;
 
   // 78 external card images from learntarot.com:
   const allCards = [
@@ -327,14 +331,22 @@ function playSettle(imgEl) {
 // Critical design: the existing onclick="newPage(event)" on the <img>
 // stays UNTOUCHED — it's the only thing that draws a card. The long-press
 // logic below only (a) plays the charge/commit animations and (b) sets
-// `consumeNextClick` so the click that follows finger-release doesn't
-// also draw. We use classic touch + mouse events (the most reliable path
-// on iOS WebKit); pointer events are avoided because their cancel timing
-// is inconsistent on iOS. The CSS rule `touch-action: none` on the img
-// stops iOS from firing its own gesture-cancel events during the hold.
+// `suppressClicksUntil` so the trailing click from finger-release does
+// not also draw.
+//
+// We register THREE event families: touch, pointer, AND mouse. iOS Chrome
+// in particular has been observed not to deliver touchstart reliably to
+// the page even when iOS Safari does — pointerdown often fires where
+// touchstart doesn't. Handlers are idempotent (guarded by the existing
+// timers/flags), so whichever family fires first wins and the others are
+// no-ops for that gesture.
+//
+// We never preventDefault on the start events — the inline onclick must
+// remain reachable so a quick tap always draws.
 
 const PRESS_PULSE_MS = 600;     // when the charge-up pulse begins
-const PRESS_COMMIT_MS = 1500;   // when the reshuffle commits
+const PRESS_COMMIT_MS = 2200;   // when the reshuffle commits (≈ one extra pulse)
+const POST_PRESS_SUPPRESS_MS = 500; // click-suppression window after a pulse
 
 let pulseTimer = null;
 let commitTimer = null;
@@ -347,41 +359,44 @@ function clearPressTimers() {
 }
 
 function pressStart() {
-  // Only the back accepts the reshuffle gesture, and only when idle.
+  // Idempotent: if any timer/flag is already active for this gesture,
+  // a duplicate start event (e.g. pointerdown after touchstart) is a no-op.
+  if (pulseTimer || commitTimer || pulseStarted || pressCommitted) return;
   if (!showingBack || drawing) return;
 
-  // Clear any stale flag from a prior weird sequence (e.g. a long-press
-  // whose trailing click never fired). A fresh touch always re-enables
-  // the normal tap-to-draw path.
-  consumeNextClick = false;
-  pulseStarted = false;
-  pressCommitted = false;
-  clearPressTimers();
-
   const imgEl = document.querySelector("img");
+  if (!imgEl) return;
 
   pulseTimer = setTimeout(() => {
+    pulseTimer = null;
     if (!showingBack || drawing) return;
     pulseStarted = true;
     imgEl.classList.add("charging");
+    // Force a style/layout flush so the animation definitely starts on
+    // browsers (iOS Chrome) that otherwise sometimes batch the class
+    // change with an immediately-following one.
+    void imgEl.offsetHeight;
     haptic(4);
 
     commitTimer = setTimeout(() => {
+      commitTimer = null;
       if (!showingBack || drawing) return;
       pressCommitted = true;
       imgEl.classList.remove("charging");
       haptic(12);
 
-      // Swallow the click that will follow finger-release so the
-      // reshuffle isn't immediately followed by a card draw.
-      consumeNextClick = true;
+      // Suppress the click that may follow finger-release so the
+      // reshuffle isn't chased by an unwanted draw.
+      suppressClicksUntil = performance.now() + POST_PRESS_SUPPRESS_MS;
 
-      // Commit: play the settle, then reset the deck. Use the same
+      // Commit: play the flare, then reset the deck. Use the same
       // `drawing` flag so nothing else fires during the animation.
       drawing = true;
       playSettle(imgEl).then(() => {
         deck = freshDeck();
         drawing = false;
+        pulseStarted = false;
+        pressCommitted = false;
       });
     }, PRESS_COMMIT_MS - PRESS_PULSE_MS);
   }, PRESS_PULSE_MS);
@@ -391,43 +406,46 @@ function pressEnd() {
   clearPressTimers();
 
   if (pressCommitted) {
-    // Commit already handled everything; the click swallow is set.
-    pressCommitted = false;
-    pulseStarted = false;
+    // Commit already handled the suppress window; nothing to do here.
+    // (pressCommitted is cleared inside the commit's playSettle promise.)
     return;
   }
 
   if (pulseStarted) {
-    // Released during the pulse — abort. Stop the animation and swallow
-    // the trailing click so we don't draw on release.
+    // Released during the pulse — abort. Stop the animation and suppress
+    // any imminent click so the gesture doesn't accidentally draw.
     const imgEl = document.querySelector("img");
     if (imgEl) imgEl.classList.remove("charging");
-    consumeNextClick = true;
+    suppressClicksUntil = performance.now() + POST_PRESS_SUPPRESS_MS;
     pulseStarted = false;
     return;
   }
 
   // Pulse never started (a normal tap). Do nothing — let the onclick
-  // fire `newPage` and draw a card.
+  // fire `newPage` and draw a card as usual.
 }
 
 function wireLongPress() {
   const imgEl = document.querySelector("img");
   if (!imgEl) return;
 
-  // Touch (mobile). Passive listeners — we never preventDefault; the
-  // click path must remain reachable.
-  imgEl.addEventListener("touchstart", pressStart, { passive: true });
-  imgEl.addEventListener("touchend",   pressEnd,   { passive: true });
-  imgEl.addEventListener("touchcancel", pressEnd,  { passive: true });
+  // Touch (most native on mobile WebKit, including iOS Safari).
+  imgEl.addEventListener("touchstart",  pressStart, { passive: true });
+  imgEl.addEventListener("touchend",    pressEnd,   { passive: true });
+  imgEl.addEventListener("touchcancel", pressEnd,   { passive: true });
+
+  // Pointer (fallback for browsers/wrappers where touchstart doesn't
+  // reach the page reliably — observed in iOS Chrome).
+  imgEl.addEventListener("pointerdown", pressStart);
+  imgEl.addEventListener("pointerup",   pressEnd);
+  imgEl.addEventListener("pointercancel", pressEnd);
 
   // Mouse (desktop).
   imgEl.addEventListener("mousedown",  pressStart);
   imgEl.addEventListener("mouseup",    pressEnd);
   imgEl.addEventListener("mouseleave", pressEnd);
 
-  // Suppress iOS save-image / context menu on long-press as a belt-and-
-  // suspenders next to the CSS callout suppression.
+  // Belt-and-suspenders next to the CSS callout suppression.
   imgEl.addEventListener("contextmenu", (e) => e.preventDefault());
 }
 

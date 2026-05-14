@@ -47,21 +47,25 @@
        advertising that something larger is being summoned. */
     @keyframes chargePulse {
       0%, 100% { filter: brightness(1.0); }
-      50%      { filter: brightness(1.28); }
+      50%      { filter: brightness(1.32); }
     }
     img.charging {
       animation: chargePulse 700ms ease-in-out infinite;
+      will-change: filter;
     }
 
-    /* Commit / auto-reshuffle: a brighter, single-pulse lift — the
-       moment the deck is squared up. */
+    /* Commit / auto-reshuffle flare: a quick brightness punch with a soft
+       outward halo via drop-shadow, then a slow ease back to neutral.
+       Reads as "a shuffle just happened." */
     @keyframes deckSettle {
-      0%   { filter: brightness(1.0); }
-      22%  { filter: brightness(1.4);  }
-      100% { filter: brightness(1.0); }
+      0%   { filter: brightness(1.0) drop-shadow(0 0 0   rgba(255,255,255,0)); }
+      9%   { filter: brightness(1.6) drop-shadow(0 0 26px rgba(255,255,255,0.55)); }
+      28%  { filter: brightness(1.25) drop-shadow(0 0 14px rgba(255,255,255,0.22)); }
+      100% { filter: brightness(1.0) drop-shadow(0 0 0   rgba(255,255,255,0)); }
     }
     img.settling {
-      animation: deckSettle 520ms cubic-bezier(0.2, 0, 0, 1);
+      animation: deckSettle 720ms cubic-bezier(0.2, 0, 0, 1);
+      will-change: filter;
     }
 
     /* "The breath": card recedes and dims while the next card is drawn.
