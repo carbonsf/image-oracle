@@ -32,33 +32,6 @@
         transform 240ms cubic-bezier(0.2, 0, 0, 1);
       will-change: opacity, transform;
       -webkit-tap-highlight-color: transparent;
-      /* Suppress iOS "save image" / context menu and text-selection so
-         the long-press gesture stays ours. */
-      -webkit-touch-callout: none;
-      -webkit-user-select: none;
-      user-select: none;
-      -webkit-user-drag: none;
-    }
-
-    /* Long-press charge: a slow brightness pulse on the back, advertising
-       that something larger is being summoned. */
-    @keyframes chargePulse {
-      0%, 100% { filter: brightness(1.0); }
-      50%      { filter: brightness(1.18); }
-    }
-    img.charging {
-      animation: chargePulse 700ms ease-in-out infinite;
-    }
-
-    /* Commit / auto-reshuffle: a single brightness lift + tiny scale
-       settle — the deck being squared up after a shuffle. */
-    @keyframes deckSettle {
-      0%   { filter: brightness(1.0);  transform: scale(1.0); }
-      22%  { filter: brightness(1.22); transform: scale(0.99); }
-      100% { filter: brightness(1.0);  transform: scale(1.0); }
-    }
-    img.settling {
-      animation: deckSettle 500ms cubic-bezier(0.2, 0, 0, 1);
     }
 
     /* "The breath": card recedes and dims while the next card is drawn.
@@ -94,24 +67,14 @@
         opacity: 0;
         transition: opacity 140ms linear;
       }
-      img.charging {
-        animation: none;
-        filter: brightness(1.12);
-        transition: filter 200ms linear;
-      }
-      img.settling {
-        animation: none;
-        filter: brightness(1.0);
-      }
     }
   </style>
 </head>
 <body>
-  <!-- Local image to start (RoseLilyRed.jpg must be in the same folder).
-       Pointer handlers are wired in Randomizer.js so tap vs. long-press
-       can be disambiguated cleanly. -->
-  <img
-    src="RoseLilyRed.jpg"
+  <!-- Local image to start (RoseLilyRed.jpg must be in the same folder) -->
+  <img 
+    src="RoseLilyRed.jpg" 
+    onclick="newPage(event)" 
     alt="Tarot Card"
   />
 
