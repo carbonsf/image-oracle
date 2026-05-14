@@ -40,6 +40,20 @@
       transform: scale(0.985);
     }
 
+    /* "Settling": the card is at rest and cannot yet be pulled (quantum
+       source is in cooldown). A slow, almost-imperceptible respiration
+       via filter:brightness — no opacity change, so it never competes
+       with the reveal transition. Cursor reverts so the absence of
+       affordance signals the absence of readiness. */
+    @keyframes settling-breath {
+      0%, 100% { filter: brightness(1); }
+      50%      { filter: brightness(0.86); }
+    }
+    img.settling {
+      animation: settling-breath 3.4s ease-in-out infinite;
+      cursor: default;
+    }
+
     @media (prefers-reduced-motion: reduce) {
       img {
         transition: opacity 120ms linear;
@@ -48,6 +62,12 @@
       img.dimmed {
         transform: none;
         opacity: 0.4;
+      }
+      /* Drop the breath to a static dim; users opting out of motion still
+         get a visible "not ready" state, just without animation. */
+      img.settling {
+        animation: none;
+        filter: brightness(0.9);
       }
     }
   </style>

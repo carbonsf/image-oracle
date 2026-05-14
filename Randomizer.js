@@ -2,7 +2,22 @@
 // a beat of consideration rather than a snap.
 const MIN_HOLD_MS = 260;
 
+// ANU free tier is ~1 request per 60 seconds. After every successful ANU
+// draw we disarm the card for this long; if ANU returns 429 with a
+// Retry-After header, we honor that instead.
+const ANU_COOLDOWN_MS = 60_000;
+
 let drawing = false;
+
+// performance.now() timestamp at which the next quantum draw is allowed.
+// Starts at 0 so the very first click works immediately.
+let nextAvailableAt = 0;
+function isCoolingDown() {
+  return performance.now() < nextAvailableAt;
+}
+function msUntilAvailable() {
+  return Math.max(0, nextAvailableAt - performance.now());
+}
 
 function preloadImage(url) {
   return new Promise((resolve) => {
@@ -26,16 +41,36 @@ function preloadImage(url) {
 const ANU_KEY = "FREE_qrng-key_1778780851";
 const ANU_URL = "https://api.quantumnumbers.anu.edu.au?length=8&type=uint8";
 
+function rateLimitError(retryAfterMs) {
+  const err = new Error("ANU rate limited");
+  err.rateLimited = true;
+  err.retryAfterMs = retryAfterMs;
+  return err;
+}
+
 async function fetchANUBytes() {
   const res = await fetch(ANU_URL, {
     headers: { "x-api-key": ANU_KEY },
     cache: "no-store",
   });
+  // Standard HTTP rate-limit signal.
+  if (res.status === 429) {
+    const ra = parseInt(res.headers.get("Retry-After") || "", 10);
+    throw rateLimitError(Number.isFinite(ra) ? ra * 1000 : ANU_COOLDOWN_MS);
+  }
   if (!res.ok) throw new Error("ANU HTTP " + res.status);
   const json = await res.json();
-  if (!json.success || !Array.isArray(json.data)) {
-    throw new Error("ANU returned no data");
+  // ANU sometimes returns 200 with {success: false, message: "..."} when
+  // the quota is exhausted; treat any message mentioning rate/limit/quota
+  // as a rate-limit signal too.
+  if (!json.success) {
+    const msg = (json.message || "").toString();
+    if (/rate|limit|quota|exceed/i.test(msg)) {
+      throw rateLimitError(ANU_COOLDOWN_MS);
+    }
+    throw new Error("ANU error: " + (msg || "unknown"));
   }
+  if (!Array.isArray(json.data)) throw new Error("ANU returned no data");
   return new Uint8Array(json.data);
 }
 
@@ -56,16 +91,38 @@ async function fetchRandomOrgBytes() {
 
 async function getCosmicBytes() {
   try {
-    return { bytes: await fetchANUBytes(), source: "ANU" };
+    const bytes = await fetchANUBytes();
+    return { bytes, source: "ANU", cooldownMs: ANU_COOLDOWN_MS };
   } catch (e1) {
-    console.warn("ANU unavailable, trying random.org:", e1);
+    // If ANU specifically rate-limited us, surface that so the caller can
+    // honor the exact Retry-After. We still need bytes for this draw, so
+    // fall back to a non-rate-limited source — but the cooldown afterward
+    // matches what ANU told us.
+    const rateLimited = !!e1.rateLimited;
+    console.warn(
+      rateLimited
+        ? `ANU rate-limited (retry in ${Math.round(e1.retryAfterMs / 1000)}s), using random.org for this draw`
+        : "ANU unavailable, trying random.org:",
+      e1
+    );
     try {
-      return { bytes: await fetchRandomOrgBytes(), source: "random.org" };
+      const bytes = await fetchRandomOrgBytes();
+      return {
+        bytes,
+        source: "random.org",
+        // Only enforce cooldown when ANU explicitly told us to wait. If ANU
+        // is just down (network), don't lock the user out.
+        cooldownMs: rateLimited ? e1.retryAfterMs : 0,
+      };
     } catch (e2) {
-      console.warn("random.org also unavailable, falling back to Math.random:", e2);
+      console.warn("random.org also unavailable, using crypto.getRandomValues:", e2);
       const bytes = new Uint8Array(8);
       crypto.getRandomValues(bytes); // browser CSPRNG; better than Math.random
-      return { bytes, source: "crypto.getRandomValues" };
+      return {
+        bytes,
+        source: "crypto.getRandomValues",
+        cooldownMs: rateLimited ? e1.retryAfterMs : 0,
+      };
     }
   }
 }
@@ -113,13 +170,12 @@ async function pickRandomIndex(max, event) {
     const uint32 = new DataView(digest).getUint32(0, false);
     const idx = unbiasedIndex(uint32, max);
     if (idx !== null) {
-      console.debug(`draw: source=${cosmic.source}, index=${idx}`);
-      return idx;
+      console.debug(`draw: source=${cosmic.source}, index=${idx}, cooldown=${cosmic.cooldownMs}ms`);
+      return { idx, source: cosmic.source, cooldownMs: cosmic.cooldownMs };
     }
     counter++;
     if (counter > 16) {
-      // Defensive — should never happen.
-      return uint32 % max;
+      return { idx: uint32 % max, source: cosmic.source, cooldownMs: cosmic.cooldownMs };
     }
   }
 }
@@ -207,19 +263,23 @@ async function newPage(event) {
     "https://www.learntarot.com/bigjpgs/pents14.jpg"
   ];
 
-  if (drawing) return;
-  drawing = true;
-
   const imgEl = document.querySelector("img");
 
-  // Begin "the breath": dim + slight recede.
+  // If the quantum source is still cooling down, the card is "settling" —
+  // it cannot yet be pulled. The slow CSS breath communicates this without
+  // any UI chrome. Click is silently absorbed.
+  if (drawing || isCoolingDown()) return;
+  drawing = true;
+
+  // Begin the reveal-breath: dim + slight recede.
+  imgEl.classList.remove("settling"); // in case a stale class lingers
   imgEl.classList.add("dimmed");
   const holdUntil = performance.now() + MIN_HOLD_MS;
 
-  // Draw the index (random.org with Math.random fallback) and preload the
-  // chosen image so the reveal doesn't stall on a slow JPG.
-  const randomIndex = await pickRandomIndex(allCards.length, event);
-  const chosenUrl = allCards[randomIndex];
+  // Mix cosmic bytes with the gesture, preload the chosen image so the
+  // reveal doesn't stall on a slow JPG.
+  const { idx, source, cooldownMs } = await pickRandomIndex(allCards.length, event);
+  const chosenUrl = allCards[idx];
   await preloadImage(chosenUrl);
 
   // Honor a minimum hold so the transition has rhythm even on cache hits.
@@ -228,12 +288,25 @@ async function newPage(event) {
     await new Promise((r) => setTimeout(r, remaining));
   }
 
+  // Arm the cooldown the moment the draw completes — based on what the
+  // source told us (60s after a real ANU draw, exactly Retry-After after
+  // a 429, zero when we silently fell back due to network problems).
+  nextAvailableAt = performance.now() + (cooldownMs || 0);
+
   // Swap the source while still dimmed (any flash is masked by low opacity),
   // then on the next frame release the dim — the card fades up into focus.
   imgEl.src = chosenUrl;
   requestAnimationFrame(() => {
     imgEl.classList.remove("dimmed");
-    // Match the CSS transition duration before allowing another draw.
-    setTimeout(() => { drawing = false; }, 260);
+    setTimeout(() => {
+      drawing = false;
+      // If we're still in cooldown after the reveal completes, start the
+      // slow settling breath. Remove it the moment we're due to be ready.
+      const wait = msUntilAvailable();
+      if (wait > 0) {
+        imgEl.classList.add("settling");
+        setTimeout(() => imgEl.classList.remove("settling"), wait);
+      }
+    }, 260);
   });
 }
