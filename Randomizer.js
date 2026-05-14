@@ -11,15 +11,22 @@ let showingBack = true;
 
 const BACK_SRC = "RoseLilyRed.jpg";
 
-// --- Deck state: draw-without-replacement -----------------------------
-// `deck` is the set of card indices not yet drawn this shuffle. When it
-// empties we reshuffle (auto-visualized as a settle), or the querent can
-// reshuffle manually via long-press on the back.
-const DECK_SIZE = 78;
-function freshDeck() {
-  return Array.from({ length: DECK_SIZE }, (_, i) => i);
-}
-let deck = freshDeck();
+// --- Flickr source ----------------------------------------------------
+// The deck is no longer 78 fixed tarot cards but the whole of Flickr —
+// each draw fetches one portrait photo sampled as randomly as the public
+// API allows. Strategy: pick a random upload day between Flickr's early
+// years and today, search portraits uploaded that day, jump to a random
+// page within the results, pick a random photo from that page.
+// Flickr "key-only" public-read methods (like flickr.photos.search) need
+// only the API key. The secret is kept here for completeness / future
+// signed calls but isn't sent on the wire by anything in this file.
+const FLICKR_API_KEY = "bf234cae7bad1fed6373f96001293cd5";
+const FLICKR_API_SECRET = "6f87a42dee30669a";
+const FLICKR_REST = "https://api.flickr.com/services/rest/";
+const FLICKR_EPOCH = new Date("2005-01-01").getTime();
+const FLICKR_MAX_ATTEMPTS = 4;
+const FLICKR_PER_PAGE = 100;
+const FLICKR_RESULT_CAP = 4000; // Flickr only paginates the first 4000 hits
 
 // Timestamp (performance.now ms) until which click events should be
 // ignored. Set by the long-press handlers after a pulse/commit fires so
@@ -137,21 +144,77 @@ function unbiasedIndex(uint32, max) {
   return uint32 < limit ? uint32 % max : null;
 }
 
-async function pickRandomIndex(max, event) {
+// Build a closure that yields a stream of unbiased integers in [0, max),
+// each one derived from a fresh SHA-256 of (cosmic ‖ gesture ‖ counter).
+// One cosmic fetch per draw, reused across all the random choices the
+// Flickr path needs (day, page, photo-index, plus any retry rerolls).
+async function makeCosmicRng(event) {
   const cosmicBytes = await getCosmicBytes();
   const gestureBytes = encodeGesture(event);
-
   let counter = 0;
-  while (true) {
-    const counterByte = new Uint8Array([counter]);
-    const material = concatBytes(concatBytes(cosmicBytes, gestureBytes), counterByte);
-    const digest = await crypto.subtle.digest("SHA-256", material);
-    const uint32 = new DataView(digest).getUint32(0, false);
-    const idx = unbiasedIndex(uint32, max);
-    if (idx !== null) return idx;
-    counter++;
-    if (counter > 16) return uint32 % max;
+  return async function rng(max) {
+    while (true) {
+      const counterByte = new Uint8Array([counter++ & 0xff]);
+      const material = concatBytes(concatBytes(cosmicBytes, gestureBytes), counterByte);
+      const digest = await crypto.subtle.digest("SHA-256", material);
+      const uint32 = new DataView(digest).getUint32(0, false);
+      const idx = unbiasedIndex(uint32, max);
+      if (idx !== null) return idx;
+      if (counter > 128) return uint32 % max;
+    }
+  };
+}
+
+// One round trip per draw becomes two: first call learns how many photos
+// were uploaded that day, second call fetches a random page from within
+// the result set. Returns a Flickr static URL or null if all attempts
+// failed (empty day, network error, etc.) — caller treats null as "the
+// cosmos declined to answer; leave the back showing."
+async function fetchRandomFlickrUrl(event) {
+  const rng = await makeCosmicRng(event);
+  const totalDays = Math.max(1, Math.floor((Date.now() - FLICKR_EPOCH) / 86400000));
+
+  for (let attempt = 0; attempt < FLICKR_MAX_ATTEMPTS; attempt++) {
+    const dayOffset = await rng(totalDays);
+    const dayStart = FLICKR_EPOCH + dayOffset * 86400000;
+    const minSec = Math.floor(dayStart / 1000);
+    const maxSec = Math.floor((dayStart + 86400000) / 1000);
+
+    const params = new URLSearchParams({
+      method: "flickr.photos.search",
+      api_key: FLICKR_API_KEY,
+      orientation: "portrait",
+      safe_search: "1",
+      content_type: "1",     // photos only — no screenshots/illustrations
+      media: "photos",
+      min_upload_date: String(minSec),
+      max_upload_date: String(maxSec),
+      per_page: String(FLICKR_PER_PAGE),
+      page: "1",
+      format: "json",
+      nojsoncallback: "1",
+    });
+
+    try {
+      const head = await fetch(`${FLICKR_REST}?${params}`).then((r) => r.json());
+      const total = Math.min(head?.photos?.total ?? 0, FLICKR_RESULT_CAP);
+      if (total === 0) continue;
+      const pages = Math.max(1, Math.ceil(total / FLICKR_PER_PAGE));
+      const page = 1 + (await rng(pages));
+      params.set("page", String(page));
+      const body = await fetch(`${FLICKR_REST}?${params}`).then((r) => r.json());
+      const photos = body?.photos?.photo ?? [];
+      if (!photos.length) continue;
+      const p = photos[await rng(photos.length)];
+      // "_b" suffix = 1024px on the long edge: large enough for a full-
+      // viewport portrait without overpaying on bandwidth.
+      return `https://live.staticflickr.com/${p.server}/${p.id}_${p.secret}_b.jpg`;
+    } catch (_e) {
+      // Try the next random day; transient network errors shouldn't strand
+      // the user on a frozen back.
+    }
   }
+  return null;
 }
 
 async function newPage(event) {
@@ -161,88 +224,6 @@ async function newPage(event) {
   // fires before or after `touchend` on a given browser.
   if (performance.now() < suppressClicksUntil) return;
 
-  // 78 external card images from learntarot.com:
-  const allCards = [
-    "https://www.learntarot.com/bigjpgs/maj00.jpg",
-    "https://www.learntarot.com/bigjpgs/maj01.jpg",
-    "https://www.learntarot.com/bigjpgs/maj02.jpg",
-    "https://www.learntarot.com/bigjpgs/maj03.jpg",
-    "https://www.learntarot.com/bigjpgs/maj04.jpg",
-    "https://www.learntarot.com/bigjpgs/maj05.jpg",
-    "https://www.learntarot.com/bigjpgs/maj06.jpg",
-    "https://www.learntarot.com/bigjpgs/maj07.jpg",
-    "https://www.learntarot.com/bigjpgs/maj08.jpg",
-    "https://www.learntarot.com/bigjpgs/maj09.jpg",
-    "https://www.learntarot.com/bigjpgs/maj10.jpg",
-    "https://www.learntarot.com/bigjpgs/maj11.jpg",
-    "https://www.learntarot.com/bigjpgs/maj12.jpg",
-    "https://www.learntarot.com/bigjpgs/maj13.jpg",
-    "https://www.learntarot.com/bigjpgs/maj14.jpg",
-    "https://www.learntarot.com/bigjpgs/maj15.jpg",
-    "https://www.learntarot.com/bigjpgs/maj16.jpg",
-    "https://www.learntarot.com/bigjpgs/maj17.jpg",
-    "https://www.learntarot.com/bigjpgs/maj18.jpg",
-    "https://www.learntarot.com/bigjpgs/maj19.jpg",
-    "https://www.learntarot.com/bigjpgs/maj20.jpg",
-    "https://www.learntarot.com/bigjpgs/maj21.jpg",
-    "https://www.learntarot.com/bigjpgs/wands01.jpg",
-    "https://www.learntarot.com/bigjpgs/wands02.jpg",
-    "https://www.learntarot.com/bigjpgs/wands03.jpg",
-    "https://www.learntarot.com/bigjpgs/wands04.jpg",
-    "https://www.learntarot.com/bigjpgs/wands05.jpg",
-    "https://www.learntarot.com/bigjpgs/wands06.jpg",
-    "https://www.learntarot.com/bigjpgs/wands07.jpg",
-    "https://www.learntarot.com/bigjpgs/wands08.jpg",
-    "https://www.learntarot.com/bigjpgs/wands09.jpg",
-    "https://www.learntarot.com/bigjpgs/wands10.jpg",
-    "https://www.learntarot.com/bigjpgs/wands11.jpg",
-    "https://www.learntarot.com/bigjpgs/wands12.jpg",
-    "https://www.learntarot.com/bigjpgs/wands13.jpg",
-    "https://www.learntarot.com/bigjpgs/wands14.jpg",
-    "https://www.learntarot.com/bigjpgs/cups01.jpg",
-    "https://www.learntarot.com/bigjpgs/cups02.jpg",
-    "https://www.learntarot.com/bigjpgs/cups03.jpg",
-    "https://www.learntarot.com/bigjpgs/cups04.jpg",
-    "https://www.learntarot.com/bigjpgs/cups05.jpg",
-    "https://www.learntarot.com/bigjpgs/cups06.jpg",
-    "https://www.learntarot.com/bigjpgs/cups07.jpg",
-    "https://www.learntarot.com/bigjpgs/cups08.jpg",
-    "https://www.learntarot.com/bigjpgs/cups09.jpg",
-    "https://www.learntarot.com/bigjpgs/cups10.jpg",
-    "https://www.learntarot.com/bigjpgs/cups11.jpg",
-    "https://www.learntarot.com/bigjpgs/cups12.jpg",
-    "https://www.learntarot.com/bigjpgs/cups13.jpg",
-    "https://www.learntarot.com/bigjpgs/cups14.jpg",
-    "https://www.learntarot.com/bigjpgs/swords01.jpg",
-    "https://www.learntarot.com/bigjpgs/swords02.jpg",
-    "https://www.learntarot.com/bigjpgs/swords03.jpg",
-    "https://www.learntarot.com/bigjpgs/swords04.jpg",
-    "https://www.learntarot.com/bigjpgs/swords05.jpg",
-    "https://www.learntarot.com/bigjpgs/swords06.jpg",
-    "https://www.learntarot.com/bigjpgs/swords07.jpg",
-    "https://www.learntarot.com/bigjpgs/swords08.jpg",
-    "https://www.learntarot.com/bigjpgs/swords09.jpg",
-    "https://www.learntarot.com/bigjpgs/swords10.jpg",
-    "https://www.learntarot.com/bigjpgs/swords11.jpg",
-    "https://www.learntarot.com/bigjpgs/swords12.jpg",
-    "https://www.learntarot.com/bigjpgs/swords13.jpg",
-    "https://www.learntarot.com/bigjpgs/swords14.jpg",
-    "https://www.learntarot.com/bigjpgs/pents01.jpg",
-    "https://www.learntarot.com/bigjpgs/pents02.jpg",
-    "https://www.learntarot.com/bigjpgs/pents03.jpg",
-    "https://www.learntarot.com/bigjpgs/pents04.jpg",
-    "https://www.learntarot.com/bigjpgs/pents05.jpg",
-    "https://www.learntarot.com/bigjpgs/pents06.jpg",
-    "https://www.learntarot.com/bigjpgs/pents07.jpg",
-    "https://www.learntarot.com/bigjpgs/pents08.jpg",
-    "https://www.learntarot.com/bigjpgs/pents09.jpg",
-    "https://www.learntarot.com/bigjpgs/pents10.jpg",
-    "https://www.learntarot.com/bigjpgs/pents11.jpg",
-    "https://www.learntarot.com/bigjpgs/pents12.jpg",
-    "https://www.learntarot.com/bigjpgs/pents13.jpg",
-    "https://www.learntarot.com/bigjpgs/pents14.jpg"
-  ];
-
   const imgEl = document.querySelector("img");
 
   // Ignore a click while a draw or reset is mid-flight.
@@ -250,29 +231,25 @@ async function newPage(event) {
   drawing = true;
 
   if (showingBack) {
-    await drawCard(imgEl, event, allCards);
+    await drawCard(imgEl, event);
   } else {
     await setDownToBack(imgEl);
   }
 }
 
-// "Breath": dim + recede, fetch entropy, swap to the chosen card, fade up.
-async function drawCard(imgEl, event, allCards) {
-  // If the deck is exhausted, honor the moment with a settle animation
-  // before drawing the first card of the new shuffle.
-  if (deck.length === 0) {
-    await playSettle(imgEl);
-    deck = freshDeck();
-  }
-
+// "Breath": dim + recede, fetch a random Flickr portrait, swap, fade up.
+async function drawCard(imgEl, event) {
   imgEl.classList.add("dimmed");
   const holdUntil = performance.now() + MIN_HOLD_MS;
 
-  // Pick from the remaining deck (without replacement) — splice removes
-  // the chosen index so it can't repeat until the next reshuffle.
-  const pickAt = await pickRandomIndex(deck.length, event);
-  const cardIdx = deck.splice(pickAt, 1)[0];
-  const chosenUrl = allCards[cardIdx];
+  const chosenUrl = await fetchRandomFlickrUrl(event);
+  if (!chosenUrl) {
+    // Cosmos declined — release the dim and leave the back showing so
+    // the next tap can try again.
+    imgEl.classList.remove("dimmed");
+    drawing = false;
+    return;
+  }
   await preloadImage(chosenUrl);
 
   // Honor a minimum hold so the transition has rhythm even on cache hits.
@@ -389,11 +366,12 @@ function pressStart() {
       // reshuffle isn't chased by an unwanted draw.
       suppressClicksUntil = performance.now() + POST_PRESS_SUPPRESS_MS;
 
-      // Commit: play the flare, then reset the deck. Use the same
-      // `drawing` flag so nothing else fires during the animation.
+      // Commit: play the flare. With an infinite Flickr pool there's no
+      // deck to reset, so the gesture is purely ceremonial — a "clear the
+      // field" moment before the next draw. Use the `drawing` flag so
+      // nothing else fires during the animation.
       drawing = true;
       playSettle(imgEl).then(() => {
-        deck = freshDeck();
         drawing = false;
         pulseStarted = false;
         pressCommitted = false;
