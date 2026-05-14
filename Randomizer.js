@@ -2,24 +2,8 @@
 // a beat of consideration rather than a snap.
 const MIN_HOLD_MS = 260;
 
-// NIST publishes a fresh quantum-sourced pulse every 60 seconds. The
-// cooldown is computed dynamically from the pulse's timestamp so the card
-// re-arms the moment the *next* pulse is due, not a fixed interval after
-// the click.
-const NIST_PULSE_INTERVAL_MS = 60_000;
-const NIST_MIN_COOLDOWN_MS = 4_000; // safety floor for clock skew
-
+// Re-entrancy guard: ignore a click while a draw is mid-flight.
 let drawing = false;
-
-// performance.now() timestamp at which the next quantum draw is allowed.
-// Starts at 0 so the very first click works immediately.
-let nextAvailableAt = 0;
-function isCoolingDown() {
-  return performance.now() < nextAvailableAt;
-}
-function msUntilAvailable() {
-  return Math.max(0, nextAvailableAt - performance.now());
-}
 
 let drawCounter = 0;
 
@@ -105,7 +89,6 @@ function renderDebugOverlay(telem) {
     `    index             ${telem.cardIndex} / 78`,
     `    card              ${telem.cardName}`,
     `    total draw time   ${fmtMs(telem.totalDrawMs)}`,
-    `    next draw in      ${(telem.cooldownMs / 1000).toFixed(1)} s`,
   ];
   el.textContent = lines.filter((l) => l != null).join("\n");
 }
@@ -159,20 +142,14 @@ async function fetchNISTBeacon(telem) {
     const bytes = hexToBytes(pulse.outputValue, 8);
 
     const pulseEpochMs = new Date(pulse.timeStamp).getTime();
-    const nextPulseEpochMs = pulseEpochMs + NIST_PULSE_INTERVAL_MS;
-    const cooldownMs = Math.max(
-      NIST_MIN_COOLDOWN_MS,
-      nextPulseEpochMs - Date.now()
-    );
 
     telem.nist.ok = true;
     telem.nist.latencyMs = performance.now() - t0;
     telem.nist.pulseIndex = pulse.pulseIndex;
     telem.nist.pulseTimeStamp = pulse.timeStamp;
     telem.nist.pulseAgeMs = Date.now() - pulseEpochMs;
-    telem.nist.cooldownMs = cooldownMs;
 
-    return { bytes, cooldownMs };
+    return { bytes };
   } catch (e) {
     telem.nist.ok = false;
     telem.nist.latencyMs = performance.now() - t0;
@@ -206,19 +183,17 @@ async function fetchRandomOrgBytes(telem) {
 
 async function getCosmicBytes(telem) {
   try {
-    const { bytes, cooldownMs } = await fetchNISTBeacon(telem);
-    return { bytes, source: "NIST", cooldownMs };
+    const { bytes } = await fetchNISTBeacon(telem);
+    return { bytes, source: "NIST" };
   } catch (_e1) {
     try {
       const bytes = await fetchRandomOrgBytes(telem);
-      // If NIST is down (network/CORS) we don't really know when it'll be
-      // back; use a 30s holding cooldown so we don't hammer it.
-      return { bytes, source: "random.org", cooldownMs: 30_000 };
+      return { bytes, source: "random.org" };
     } catch (_e2) {
       telem.cryptoFallback = true;
       const bytes = new Uint8Array(8);
       crypto.getRandomValues(bytes);
-      return { bytes, source: "crypto.getRandomValues", cooldownMs: 0 };
+      return { bytes, source: "crypto.getRandomValues" };
     }
   }
 }
@@ -281,12 +256,12 @@ async function pickRandomIndex(max, event, telem) {
     const idx = unbiasedIndex(uint32, max);
     if (idx !== null) {
       telem.rejectionRehashes = counter;
-      return { idx, source: cosmic.source, cooldownMs: cosmic.cooldownMs };
+      return { idx, source: cosmic.source };
     }
     counter++;
     if (counter > 16) {
       telem.rejectionRehashes = counter;
-      return { idx: uint32 % max, source: cosmic.source, cooldownMs: cosmic.cooldownMs };
+      return { idx: uint32 % max, source: cosmic.source };
     }
   }
 }
@@ -376,14 +351,11 @@ async function newPage(event) {
 
   const imgEl = document.querySelector("img");
 
-  // If the quantum source is still cooling down, the card is "settling" —
-  // it cannot yet be pulled. The slow CSS breath communicates this without
-  // any UI chrome. Click is silently absorbed.
-  if (drawing || isCoolingDown()) return;
+  // Ignore a click while a draw is mid-flight; otherwise no gating.
+  if (drawing) return;
   drawing = true;
 
   // Begin the reveal-breath: dim + slight recede.
-  imgEl.classList.remove("settling"); // in case a stale class lingers
   imgEl.classList.add("dimmed");
   const holdUntil = performance.now() + MIN_HOLD_MS;
 
@@ -392,11 +364,10 @@ async function newPage(event) {
   drawCounter++;
   const drawStart = performance.now();
   const telem = { drawNumber: drawCounter, startedAt: new Date().toISOString() };
-  const { idx, source, cooldownMs } = await pickRandomIndex(allCards.length, event, telem);
+  const { idx } = await pickRandomIndex(allCards.length, event, telem);
   const chosenUrl = allCards[idx];
   telem.cardIndex = idx;
   telem.cardName = cardNameFromUrl(chosenUrl);
-  telem.cooldownMs = cooldownMs;
   telem.totalDrawMs = performance.now() - drawStart;
   renderDebugOverlay(telem);
   await preloadImage(chosenUrl);
@@ -407,25 +378,11 @@ async function newPage(event) {
     await new Promise((r) => setTimeout(r, remaining));
   }
 
-  // Arm the cooldown the moment the draw completes — based on what the
-  // source told us (60s after a real ANU draw, exactly Retry-After after
-  // a 429, zero when we silently fell back due to network problems).
-  nextAvailableAt = performance.now() + (cooldownMs || 0);
-
   // Swap the source while still dimmed (any flash is masked by low opacity),
   // then on the next frame release the dim — the card fades up into focus.
   imgEl.src = chosenUrl;
   requestAnimationFrame(() => {
     imgEl.classList.remove("dimmed");
-    setTimeout(() => {
-      drawing = false;
-      // If we're still in cooldown after the reveal completes, start the
-      // slow settling breath. Remove it the moment we're due to be ready.
-      const wait = msUntilAvailable();
-      if (wait > 0) {
-        imgEl.classList.add("settling");
-        setTimeout(() => imgEl.classList.remove("settling"), wait);
-      }
-    }, 260);
+    setTimeout(() => { drawing = false; }, 260);
   });
 }
