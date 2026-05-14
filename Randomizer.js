@@ -231,16 +231,7 @@ async function pickRandomIndex(max, event) {
 
 // --- Draw / reset orchestration ----------------------------------------
 
-// Set true by the long-press handlers when the gesture should NOT also
-// fire a tap-draw on release. Consumed (cleared) on the next newPage
-// call regardless of outcome.
-let consumeNextClick = false;
-
 async function newPage(event) {
-  if (consumeNextClick) {
-    consumeNextClick = false;
-    return;
-  }
   const imgEl = document.querySelector("img");
   if (drawing) return;
   drawing = true;
@@ -319,15 +310,11 @@ function playSettle(imgEl) {
 }
 
 // --- Long-press reshuffle ---------------------------------------------
-// Layered on TOP of the existing onclick="newPage(event)" path — the
-// click always fires (proven on iOS, Safari, Android, desktop). The
-// long-press logic only:
-//   1. detects a hold and animates the charge/commit, and
-//   2. when the hold passed the pulse threshold, sets `consumeNextClick`
-//      so the trailing click from finger-release does NOT trigger a draw.
-// We do NOT call preventDefault on pointerdown — that's what broke iOS
-// last time. iOS image-save popup is suppressed via the
-// -webkit-touch-callout CSS rule and a contextmenu preventDefault.
+// State machine driven by pointer events. A press on the back starts a
+// 600ms timer; if released before that, it falls through to a normal
+// tap-to-draw. After 600ms a charging pulse begins. After 1500ms total
+// the reshuffle commits (settle animation + deck reset). Releasing
+// during the pulse aborts cleanly — no draw, no reshuffle.
 
 let pressPulseTimer = null;
 let pressCommitTimer = null;
@@ -338,14 +325,16 @@ function clearPressTimers() {
   if (pressCommitTimer) { clearTimeout(pressCommitTimer); pressCommitTimer = null; }
 }
 
-function onPressStart(event) {
+function onPointerDown(event) {
   // Only the back accepts the long-press; ignore otherwise.
   if (!showingBack || drawing) return;
+  // Stop iOS from doing image callouts and selection.
+  event.preventDefault();
 
   pressPhase = "pending";
   clearPressTimers();
 
-  const imgEl = event.currentTarget || document.querySelector("img");
+  const imgEl = event.currentTarget;
   pressPulseTimer = setTimeout(() => {
     if (pressPhase !== "pending") return;
     pressPhase = "charging";
@@ -357,10 +346,8 @@ function onPressStart(event) {
       pressPhase = "committed";
       imgEl.classList.remove("charging");
       haptic(12);
-      // Swallow the click that will fire on finger-release so it doesn't
-      // immediately draw a card after the reshuffle.
-      consumeNextClick = true;
-      // Run the settle animation and reset the deck.
+      // Commit: settle + reset deck. Use the same flag as draws so a tap
+      // during the settle doesn't double-fire.
       drawing = true;
       playSettle(imgEl).then(() => {
         deck = freshDeck();
@@ -371,47 +358,59 @@ function onPressStart(event) {
   }, PRESS_PULSE_MS);
 }
 
-function onPressEnd() {
+function onPointerEnd(event) {
+  const imgEl = event.currentTarget;
+
   if (pressPhase === "pending") {
-    // Released before the pulse — let the onclick fire normally (draw).
+    // Released before the pulse began — treat as a normal tap.
     clearPressTimers();
     pressPhase = "idle";
+    newPage(event);
     return;
   }
+
   if (pressPhase === "charging") {
-    // Released during the pulse — abort, and swallow the trailing click
-    // so we don't immediately draw.
+    // Released during the pulse — abort. No draw, no reshuffle.
     clearPressTimers();
-    const imgEl = document.querySelector("img");
-    if (imgEl) imgEl.classList.remove("charging");
-    consumeNextClick = true;
+    imgEl.classList.remove("charging");
     pressPhase = "idle";
     return;
   }
-  // committed / idle — nothing to do; commit already set consumeNextClick.
+
+  if (pressPhase === "committed") {
+    // Commit already fired; nothing to do on release.
+    return;
+  }
+
+  // idle — pointerdown was on a face-up card. Let the click path handle it.
+  if (!showingBack) {
+    newPage(event);
+  }
 }
 
-function onPressCancel() {
+function onPointerCancel() {
+  // Lost the pointer (system gesture, tab switch, etc). Always abort.
   if (pressPhase === "charging") {
     const imgEl = document.querySelector("img");
     if (imgEl) imgEl.classList.remove("charging");
-    consumeNextClick = true;
   }
   clearPressTimers();
+  // If a commit is already in flight we let it finish; otherwise reset.
   if (pressPhase !== "committed") pressPhase = "idle";
 }
 
 function wireImageHandlers() {
   const imgEl = document.querySelector("img");
   if (!imgEl) return;
-  // Pointer events cover both touch and mouse modern paths.
-  imgEl.addEventListener("pointerdown", onPressStart);
-  imgEl.addEventListener("pointerup", onPressEnd);
-  imgEl.addEventListener("pointercancel", onPressCancel);
-  // Suppress the iOS "Save Image" / context menu on long-press.
+  imgEl.addEventListener("pointerdown", onPointerDown);
+  imgEl.addEventListener("pointerup", onPointerEnd);
+  imgEl.addEventListener("pointerleave", onPointerCancel);
+  imgEl.addEventListener("pointercancel", onPointerCancel);
   imgEl.addEventListener("contextmenu", (e) => e.preventDefault());
 }
 
+// Script is loaded at the end of <body>, so the <img> usually exists by
+// now. Handle both cases for safety.
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", wireImageHandlers);
 } else {

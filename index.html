@@ -108,12 +108,10 @@
 </head>
 <body>
   <!-- Local image to start (RoseLilyRed.jpg must be in the same folder).
-       Tap-to-draw is the onclick path (proven across browsers); the
-       long-press reshuffle gesture is layered on via pointer events in
-       Randomizer.js. -->
+       Pointer handlers are wired in Randomizer.js so tap vs. long-press
+       can be disambiguated cleanly. -->
   <img
     src="RoseLilyRed.jpg"
-    onclick="newPage(event)"
     alt="Tarot Card"
   />
 
