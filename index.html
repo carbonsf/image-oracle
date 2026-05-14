@@ -40,31 +40,6 @@
       transform: scale(0.985);
     }
 
-    /* --- Debug overlay (temporary, for validating the randomness path) --- */
-    #debug {
-      position: fixed;
-      top: 12px;
-      left: 12px;
-      max-width: min(560px, calc(100vw - 24px));
-      max-height: calc(100vh - 24px);
-      overflow: auto;
-      padding: 14px 16px;
-      background: rgba(0, 0, 0, 0.78);
-      color: #e8f0ff;
-      font: 12px / 1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      white-space: pre;
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      border-radius: 6px;
-      z-index: 9999;
-      pointer-events: none; /* don't block taps on the card */
-      backdrop-filter: blur(4px);
-      -webkit-backdrop-filter: blur(4px);
-      text-shadow: 0 0 2px rgba(0, 0, 0, 0.6);
-    }
-    @media (max-width: 520px) {
-      #debug { font-size: 10.5px; padding: 10px 12px; top: 8px; left: 8px; }
-    }
-
     @media (prefers-reduced-motion: reduce) {
       img {
         transition: opacity 120ms linear;

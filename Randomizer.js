@@ -5,94 +5,6 @@ const MIN_HOLD_MS = 260;
 // Re-entrancy guard: ignore a click while a draw is mid-flight.
 let drawing = false;
 
-let drawCounter = 0;
-
-// --- Debug overlay -------------------------------------------------------
-// Renders the telemetry from each draw to a prominent fixed panel. Remove
-// (or hide the #debug element via CSS) once we're done validating.
-
-function cardNameFromUrl(url) {
-  const m = url.match(/\/([a-z]+)(\d+)\.jpg$/i);
-  if (!m) return url;
-  const suit = m[1];
-  const n = parseInt(m[2], 10);
-  if (suit === "maj") {
-    const majors = ["Fool","Magician","High Priestess","Empress","Emperor","Hierophant","Lovers","Chariot","Strength","Hermit","Wheel of Fortune","Justice","Hanged Man","Death","Temperance","Devil","Tower","Star","Moon","Sun","Judgement","World"];
-    return majors[n] || `Major ${n}`;
-  }
-  const ranks = ["","Ace","2","3","4","5","6","7","8","9","10","Page","Knight","Queen","King"];
-  const rank = ranks[n] || String(n);
-  const suitNames = { wands: "Wands", cups: "Cups", swords: "Swords", pents: "Pentacles" };
-  return `${rank} of ${suitNames[suit] || suit}`;
-}
-
-function fmtMs(v) {
-  if (v == null || !Number.isFinite(v)) return "—";
-  return `${v.toFixed(1)} ms`;
-}
-
-function renderDebugOverlay(telem) {
-  let el = document.getElementById("debug");
-  if (!el) {
-    el = document.createElement("div");
-    el.id = "debug";
-    document.body.appendChild(el);
-  }
-
-  const nist = telem.nist || {};
-  const ro = telem.randomOrg || {};
-  const g = telem.gesture || {};
-
-  const sourceLabel = telem.cosmicSource === "NIST"
-    ? "NIST Beacon (two independent QRNGs)"
-    : telem.cosmicSource === "random.org"
-      ? "random.org (atmospheric)"
-      : "crypto.getRandomValues (local)";
-  const sourceBadge = telem.cosmicSource === "NIST" ? "✓ QUANTUM" : "⚠ FALLBACK";
-
-  const lines = [
-    `DRAW #${telem.drawNumber}  ${telem.startedAt.replace("T", " ").replace(/\..*/, "")}Z`,
-    ``,
-    `  source        ${sourceLabel}    ${sourceBadge}`,
-    ``,
-    `  NIST Beacon`,
-    `    attempted        ${nist.attempted ? "yes" : "no"}`,
-    `    ok               ${nist.ok === undefined ? "—" : nist.ok ? "yes" : "NO"}`,
-    `    httpStatus       ${nist.httpStatus ?? "—"}`,
-    `    latency          ${fmtMs(nist.latencyMs)}`,
-    `    pulseIndex       ${nist.pulseIndex ?? "—"}`,
-    `    pulseTimeStamp   ${nist.pulseTimeStamp || "—"}`,
-    `    pulseAge         ${nist.pulseAgeMs != null ? (nist.pulseAgeMs / 1000).toFixed(1) + " s" : "—"}`,
-    `    error            ${nist.error || "—"}`,
-    ``,
-    (ro.attempted ? [
-      `  random.org (fallback)`,
-      `    ok          ${ro.ok ? "yes" : "NO"}`,
-      `    httpStatus  ${ro.httpStatus ?? "—"}`,
-      `    latency     ${fmtMs(ro.latencyMs)}`,
-      `    error       ${ro.error || "—"}`,
-      ``,
-    ].join("\n") : ""),
-    `  gesture`,
-    `    performance.now   ${g.performanceNow != null ? g.performanceNow.toFixed(3) + " ms since load" : "—"}`,
-    `    event.timeStamp   ${g.eventTimeStamp != null ? g.eventTimeStamp.toFixed(3) + " ms" : "—"}`,
-    `    click (x, y)      (${g.clientX ?? "—"}, ${g.clientY ?? "—"}) px`,
-    `    gesture bytes     ${g.bytesHex || "—"}`,
-    ``,
-    `  mixing`,
-    `    cosmic bytes      ${telem.cosmicBytesHex || "—"}`,
-    `    sha256 head       ${telem.hashHeadHex || "—"}`,
-    `    uint32            ${telem.hashUint32 != null ? telem.hashUint32 : "—"}`,
-    `    rehashes          ${telem.rejectionRehashes ?? 0}`,
-    ``,
-    `  result`,
-    `    index             ${telem.cardIndex} / 78`,
-    `    card              ${telem.cardName}`,
-    `    total draw time   ${fmtMs(telem.totalDrawMs)}`,
-  ];
-  el.textContent = lines.filter((l) => l != null).join("\n");
-}
-
 function preloadImage(url) {
   return new Promise((resolve) => {
     const img = new Image();
@@ -123,77 +35,41 @@ function hexToBytes(hex, count) {
   return out;
 }
 
-async function fetchNISTBeacon(telem) {
-  const t0 = performance.now();
-  telem.nist = { attempted: true };
-  try {
-    const res = await fetch(NIST_BEACON_URL, { cache: "no-store" });
-    telem.nist.httpStatus = res.status;
-    if (!res.ok) throw new Error("NIST HTTP " + res.status);
-    const json = await res.json();
-    const pulse = json && json.pulse;
-    if (!pulse || typeof pulse.outputValue !== "string") {
-      throw new Error("NIST returned no pulse");
-    }
-
-    // outputValue is a 512-bit (128 hex-char) value — the canonical pulse
-    // output. We use the first 8 bytes; they're already mixed inside NIST
-    // via SHA-512 of independent quantum sources.
-    const bytes = hexToBytes(pulse.outputValue, 8);
-
-    const pulseEpochMs = new Date(pulse.timeStamp).getTime();
-
-    telem.nist.ok = true;
-    telem.nist.latencyMs = performance.now() - t0;
-    telem.nist.pulseIndex = pulse.pulseIndex;
-    telem.nist.pulseTimeStamp = pulse.timeStamp;
-    telem.nist.pulseAgeMs = Date.now() - pulseEpochMs;
-
-    return { bytes };
-  } catch (e) {
-    telem.nist.ok = false;
-    telem.nist.latencyMs = performance.now() - t0;
-    telem.nist.error = e.message;
-    throw e;
+async function fetchNISTBeacon() {
+  const res = await fetch(NIST_BEACON_URL, { cache: "no-store" });
+  if (!res.ok) throw new Error("NIST HTTP " + res.status);
+  const json = await res.json();
+  const pulse = json && json.pulse;
+  if (!pulse || typeof pulse.outputValue !== "string") {
+    throw new Error("NIST returned no pulse");
   }
+  // outputValue is a 512-bit (128 hex-char) value — the canonical pulse
+  // output, already mixed inside NIST via SHA-512 of independent quantum
+  // sources. We take the first 8 bytes.
+  return hexToBytes(pulse.outputValue, 8);
 }
 
-async function fetchRandomOrgBytes(telem) {
-  const t0 = performance.now();
-  telem.randomOrg = { attempted: true };
-  try {
-    const url = "https://www.random.org/integers/?num=8&min=0&max=255&col=1&base=10&format=plain&rnd=new";
-    const res = await fetch(url, { cache: "no-store" });
-    telem.randomOrg.httpStatus = res.status;
-    if (!res.ok) throw new Error("random.org HTTP " + res.status);
-    const nums = (await res.text()).trim().split(/\s+/).map((s) => parseInt(s, 10));
-    if (nums.length !== 8 || nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
-      throw new Error("bad bytes from random.org");
-    }
-    telem.randomOrg.ok = true;
-    telem.randomOrg.latencyMs = performance.now() - t0;
-    return new Uint8Array(nums);
-  } catch (e) {
-    telem.randomOrg.ok = false;
-    telem.randomOrg.latencyMs = performance.now() - t0;
-    telem.randomOrg.error = e.message;
-    throw e;
+async function fetchRandomOrgBytes() {
+  const url = "https://www.random.org/integers/?num=8&min=0&max=255&col=1&base=10&format=plain&rnd=new";
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error("random.org HTTP " + res.status);
+  const nums = (await res.text()).trim().split(/\s+/).map((s) => parseInt(s, 10));
+  if (nums.length !== 8 || nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+    throw new Error("bad bytes from random.org");
   }
+  return new Uint8Array(nums);
 }
 
-async function getCosmicBytes(telem) {
+async function getCosmicBytes() {
   try {
-    const { bytes } = await fetchNISTBeacon(telem);
-    return { bytes, source: "NIST" };
+    return await fetchNISTBeacon();
   } catch (_e1) {
     try {
-      const bytes = await fetchRandomOrgBytes(telem);
-      return { bytes, source: "random.org" };
+      return await fetchRandomOrgBytes();
     } catch (_e2) {
-      telem.cryptoFallback = true;
       const bytes = new Uint8Array(8);
       crypto.getRandomValues(bytes);
-      return { bytes, source: "crypto.getRandomValues" };
+      return bytes;
     }
   }
 }
@@ -227,42 +103,20 @@ function unbiasedIndex(uint32, max) {
   return uint32 < limit ? uint32 % max : null;
 }
 
-function bytesToHex(bytes) {
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join(" ");
-}
-
-async function pickRandomIndex(max, event, telem) {
-  const cosmic = await getCosmicBytes(telem);
-  telem.cosmicSource = cosmic.source;
-  telem.cosmicBytesHex = bytesToHex(cosmic.bytes);
-
+async function pickRandomIndex(max, event) {
+  const cosmicBytes = await getCosmicBytes();
   const gestureBytes = encodeGesture(event);
-  telem.gesture = {
-    performanceNow: performance.now(),
-    eventTimeStamp: event && event.timeStamp != null ? event.timeStamp : null,
-    clientX: event && event.clientX != null ? event.clientX : null,
-    clientY: event && event.clientY != null ? event.clientY : null,
-    bytesHex: bytesToHex(gestureBytes),
-  };
 
   let counter = 0;
   while (true) {
     const counterByte = new Uint8Array([counter]);
-    const material = concatBytes(concatBytes(cosmic.bytes, gestureBytes), counterByte);
+    const material = concatBytes(concatBytes(cosmicBytes, gestureBytes), counterByte);
     const digest = await crypto.subtle.digest("SHA-256", material);
     const uint32 = new DataView(digest).getUint32(0, false);
-    telem.hashHeadHex = bytesToHex(new Uint8Array(digest).slice(0, 4));
-    telem.hashUint32 = uint32;
     const idx = unbiasedIndex(uint32, max);
-    if (idx !== null) {
-      telem.rejectionRehashes = counter;
-      return { idx, source: cosmic.source };
-    }
+    if (idx !== null) return idx;
     counter++;
-    if (counter > 16) {
-      telem.rejectionRehashes = counter;
-      return { idx: uint32 % max, source: cosmic.source };
-    }
+    if (counter > 16) return uint32 % max;
   }
 }
 
@@ -351,7 +205,7 @@ async function newPage(event) {
 
   const imgEl = document.querySelector("img");
 
-  // Ignore a click while a draw is mid-flight; otherwise no gating.
+  // Ignore a click while a draw is mid-flight.
   if (drawing) return;
   drawing = true;
 
@@ -361,15 +215,8 @@ async function newPage(event) {
 
   // Mix cosmic bytes with the gesture, preload the chosen image so the
   // reveal doesn't stall on a slow JPG.
-  drawCounter++;
-  const drawStart = performance.now();
-  const telem = { drawNumber: drawCounter, startedAt: new Date().toISOString() };
-  const { idx } = await pickRandomIndex(allCards.length, event, telem);
+  const idx = await pickRandomIndex(allCards.length, event);
   const chosenUrl = allCards[idx];
-  telem.cardIndex = idx;
-  telem.cardName = cardNameFromUrl(chosenUrl);
-  telem.totalDrawMs = performance.now() - drawStart;
-  renderDebugOverlay(telem);
   await preloadImage(chosenUrl);
 
   // Honor a minimum hold so the transition has rhythm even on cache hits.
