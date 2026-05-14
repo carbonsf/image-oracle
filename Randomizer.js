@@ -1,4 +1,19 @@
-function newPage() {
+async function pickRandomIndex(max) {
+  // max is exclusive. Try random.org (atmospheric noise); fall back to Math.random.
+  const url = `https://www.random.org/integers/?num=1&min=0&max=${max - 1}&col=1&base=10&format=plain&rnd=new`;
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error("random.org HTTP " + res.status);
+    const n = parseInt((await res.text()).trim(), 10);
+    if (!Number.isInteger(n) || n < 0 || n >= max) throw new Error("bad value from random.org");
+    return n;
+  } catch (err) {
+    console.warn("random.org failed, using Math.random fallback:", err);
+    return Math.floor(Math.random() * max);
+  }
+}
+
+async function newPage() {
   // 78 external card images from learntarot.com:
   const allCards = [
     "https://www.learntarot.com/bigjpgs/maj00.jpg",
@@ -81,8 +96,9 @@ function newPage() {
     "https://www.learntarot.com/bigjpgs/pents14.jpg"
   ];
 
-  // Pick a random card from allCards
-  const randomIndex = Math.floor(Math.random() * allCards.length);
+  // Pick a random card from allCards using random.org (atmospheric noise),
+  // falling back to Math.random if the network call fails.
+  const randomIndex = await pickRandomIndex(allCards.length);
   const chosenUrl = allCards[randomIndex];
 
   // Set the <img> element to the random card
