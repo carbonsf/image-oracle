@@ -1,3 +1,18 @@
+// Minimum time the card stays dimmed, so very-fast fetches still feel like
+// a beat of consideration rather than a snap.
+const MIN_HOLD_MS = 260;
+
+let drawing = false;
+
+function preloadImage(url) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve();
+    img.onerror = () => resolve(); // don't block reveal on a load failure
+    img.src = url;
+  });
+}
+
 async function pickRandomIndex(max) {
   // max is exclusive. Try random.org (atmospheric noise); fall back to Math.random.
   const url = `https://www.random.org/integers/?num=1&min=0&max=${max - 1}&col=1&base=10&format=plain&rnd=new`;
@@ -96,11 +111,33 @@ async function newPage() {
     "https://www.learntarot.com/bigjpgs/pents14.jpg"
   ];
 
-  // Pick a random card from allCards using random.org (atmospheric noise),
-  // falling back to Math.random if the network call fails.
+  if (drawing) return;
+  drawing = true;
+
+  const imgEl = document.querySelector("img");
+
+  // Begin "the breath": dim + slight recede.
+  imgEl.classList.add("dimmed");
+  const holdUntil = performance.now() + MIN_HOLD_MS;
+
+  // Draw the index (random.org with Math.random fallback) and preload the
+  // chosen image so the reveal doesn't stall on a slow JPG.
   const randomIndex = await pickRandomIndex(allCards.length);
   const chosenUrl = allCards[randomIndex];
+  await preloadImage(chosenUrl);
 
-  // Set the <img> element to the random card
-  document.querySelector("img").src = chosenUrl;
+  // Honor a minimum hold so the transition has rhythm even on cache hits.
+  const remaining = holdUntil - performance.now();
+  if (remaining > 0) {
+    await new Promise((r) => setTimeout(r, remaining));
+  }
+
+  // Swap the source while still dimmed (any flash is masked by low opacity),
+  // then on the next frame release the dim — the card fades up into focus.
+  imgEl.src = chosenUrl;
+  requestAnimationFrame(() => {
+    imgEl.classList.remove("dimmed");
+    // Match the CSS transition duration before allowing another draw.
+    setTimeout(() => { drawing = false; }, 260);
+  });
 }
