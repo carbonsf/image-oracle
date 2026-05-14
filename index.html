@@ -34,10 +34,23 @@
       -webkit-tap-highlight-color: transparent;
     }
 
-    /* "The breath": card recedes and dims while the next card is drawn. */
+    /* "The breath": card recedes and dims while the next card is drawn.
+       Slow ease-out — feels like inhaling. */
     img.dimmed {
       opacity: 0.55;
       transform: scale(0.985);
+    }
+
+    /* "Setting down": when a face-up card is tapped, the card drifts
+       downward and fades out before being replaced by the back. Different
+       axis (vertical, not depth), different easing (firmer ease-in-out),
+       so the verb reads as "place" rather than "draw". */
+    img.resetting {
+      opacity: 0;
+      transform: translateY(6px);
+      transition:
+        opacity 300ms cubic-bezier(0.4, 0, 0.6, 1),
+        transform 300ms cubic-bezier(0.4, 0, 0.6, 1);
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -48,6 +61,11 @@
       img.dimmed {
         transform: none;
         opacity: 0.4;
+      }
+      img.resetting {
+        transform: none;
+        opacity: 0;
+        transition: opacity 140ms linear;
       }
     }
   </style>

@@ -2,8 +2,25 @@
 // a beat of consideration rather than a snap.
 const MIN_HOLD_MS = 260;
 
-// Re-entrancy guard: ignore a click while a draw is mid-flight.
+// Re-entrancy guard: ignore a click while a draw or reset is mid-flight.
 let drawing = false;
+
+// Whether the visible image is the card back (RoseLilyRed.jpg) or a face-up
+// card. A tap on the back draws; a tap on a face-up card sets it down.
+let showingBack = true;
+
+const BACK_SRC = "RoseLilyRed.jpg";
+
+// Subtle tactile beat at the moment of reveal / set-down. Feature-detected
+// because navigator.vibrate is undefined on iOS Safari and many desktops;
+// where present-but-no-hardware (most desktops), the call is a silent
+// no-op per spec. Already inside a user-gesture handler, so policy gates
+// won't block it.
+function haptic(ms) {
+  if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+    try { navigator.vibrate(ms); } catch (_e) { /* ignore */ }
+  }
+}
 
 function preloadImage(url) {
   return new Promise((resolve) => {
@@ -205,11 +222,19 @@ async function newPage(event) {
 
   const imgEl = document.querySelector("img");
 
-  // Ignore a click while a draw is mid-flight.
+  // Ignore a click while a draw or reset is mid-flight.
   if (drawing) return;
   drawing = true;
 
-  // Begin the reveal-breath: dim + slight recede.
+  if (showingBack) {
+    await drawCard(imgEl, event, allCards);
+  } else {
+    await setDownToBack(imgEl);
+  }
+}
+
+// "Breath": dim + recede, fetch entropy, swap to the chosen card, fade up.
+async function drawCard(imgEl, event, allCards) {
   imgEl.classList.add("dimmed");
   const holdUntil = performance.now() + MIN_HOLD_MS;
 
@@ -230,6 +255,32 @@ async function newPage(event) {
   imgEl.src = chosenUrl;
   requestAnimationFrame(() => {
     imgEl.classList.remove("dimmed");
+    haptic(10); // a contemplative beat — the card has arrived
+    showingBack = false;
     setTimeout(() => { drawing = false; }, 260);
+  });
+}
+
+// "Set down": face-up card drifts down + fades out, then is replaced by
+// the back, which fades in crisply. Qualitatively different from the draw
+// (vertical, not depth; firmer easing; no scale).
+async function setDownToBack(imgEl) {
+  // Make sure the back is in cache before we start the motion, so the
+  // swap is instant and the fade-in is smooth.
+  await preloadImage(BACK_SRC);
+
+  imgEl.classList.add("resetting");
+  await new Promise((r) => setTimeout(r, 300));
+
+  // Now invisible — swap to the back without a visible flash.
+  imgEl.src = BACK_SRC;
+
+  // Next frame: drop the .resetting class, letting the back fade back in
+  // from opacity 0 / translateY(6px) → 1 / 0 via the same transition.
+  requestAnimationFrame(() => {
+    imgEl.classList.remove("resetting");
+    haptic(4); // a quieter beat — the card is placed
+    showingBack = true;
+    setTimeout(() => { drawing = false; }, 300);
   });
 }
