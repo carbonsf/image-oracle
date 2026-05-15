@@ -25,6 +25,11 @@ const FLICKR_MAX_ATTEMPTS = 6; // ~1000 nouns, mostly populated; 6 picks ≈ cer
 const FLICKR_PER_PAGE = 100;
 const FLICKR_RESULT_CAP = 4000; // Flickr only paginates the first 4000 hits
 
+// Tag used for the most recent successful draw. A long-press on the
+// face-up photo re-queries this same tag with a new random page/photo,
+// letting the querent linger inside one word and watch its facets shift.
+let lastTag = null;
+
 // Lazy, memoized noun-list fetch. The file is small (~18KB) and
 // browser-cached after the first hit, so we don't bother shipping it
 // inline. If the fetch fails, draws will fail soft (back stays).
@@ -232,13 +237,15 @@ function normalizeTag(noun) {
   return String(noun).toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
-async function fetchRandomFlickrUrl(event) {
+async function fetchRandomFlickrUrl(event, { forceTag = null } = {}) {
   const [rng, nouns] = await Promise.all([makeCosmicRng(event), loadNouns()]);
-  if (!nouns.length) return null;
+  if (!forceTag && !nouns.length) return null;
 
   for (let attempt = 0; attempt < FLICKR_MAX_ATTEMPTS; attempt++) {
-    const noun = nouns[await rng(nouns.length)];
-    const tag = normalizeTag(noun);
+    // When forceTag is set we stay on that one word across all attempts
+    // (each retry just re-rolls the page/photo). Otherwise pick a fresh
+    // random noun each attempt so an empty tag never strands the user.
+    const tag = forceTag || normalizeTag(nouns[await rng(nouns.length)]);
     if (!tag) continue;
 
     const params = new URLSearchParams({
@@ -272,6 +279,9 @@ async function fetchRandomFlickrUrl(event) {
       }
       if (!photos.length) continue;
       const p = photos[await rng(photos.length)];
+      // Remember the tag so a long-press on the face-up photo can stay
+      // inside the same word and re-roll the picture.
+      lastTag = tag;
       // Pick the smallest Flickr-hosted size whose long edge covers this
       // device's card box. Saves bandwidth on phones, avoids upscaling on
       // retina desktops. Falls back to a constructed _b URL if the photo
@@ -403,18 +413,22 @@ function clearPressTimers() {
   if (commitTimer) { clearTimeout(commitTimer); commitTimer = null; }
 }
 
-function pressStart() {
+function pressStart(event) {
   // Idempotent: if any timer/flag is already active for this gesture,
   // a duplicate start event (e.g. pointerdown after touchstart) is a no-op.
   if (pulseTimer || commitTimer || pulseStarted || pressCommitted) return;
-  if (!showingBack || drawing) return;
+  if (drawing) return;
 
   const imgEl = document.querySelector("img");
   if (!imgEl) return;
 
+  // Capture the gesture event for cosmic-entropy seeding inside the
+  // commit callback (timer closures don't otherwise receive it).
+  const gestureEvent = event;
+
   pulseTimer = setTimeout(() => {
     pulseTimer = null;
-    if (!showingBack || drawing) return;
+    if (drawing) return;
     pulseStarted = true;
     imgEl.classList.add("charging");
     // Force a style/layout flush so the animation definitely starts on
@@ -425,27 +439,58 @@ function pressStart() {
 
     commitTimer = setTimeout(() => {
       commitTimer = null;
-      if (!showingBack || drawing) return;
+      if (drawing) return;
       pressCommitted = true;
       imgEl.classList.remove("charging");
       haptic(12);
 
       // Suppress the click that may follow finger-release so the
-      // reshuffle isn't chased by an unwanted draw.
+      // reshuffle isn't chased by an unwanted draw/set-down.
       suppressClicksUntil = performance.now() + POST_PRESS_SUPPRESS_MS;
 
-      // Commit: play the flare. With an infinite Flickr pool there's no
-      // deck to reset, so the gesture is purely ceremonial — a "clear the
-      // field" moment before the next draw. Use the `drawing` flag so
-      // nothing else fires during the animation.
+      // Snapshot card state at commit time. On the back the gesture is
+      // purely ceremonial. On a face-up photo it re-rolls within the
+      // same word — a fresh page+photo from the same Flickr tag.
+      const reshufflingPhoto = !showingBack && !!lastTag;
+      const tagToReroll = lastTag;
+
       drawing = true;
-      playSettle(imgEl).then(() => {
+      // Kick the fetch in parallel with the settle animation so the
+      // ritual and the network round trip overlap.
+      const fetchPromise = reshufflingPhoto
+        ? fetchRandomFlickrUrl(gestureEvent, { forceTag: tagToReroll })
+        : Promise.resolve(null);
+
+      playSettle(imgEl).then(async () => {
+        if (reshufflingPhoto) {
+          await applyReshuffledPhoto(imgEl, fetchPromise);
+        }
         drawing = false;
         pulseStarted = false;
         pressCommitted = false;
       });
     }, PRESS_COMMIT_MS - PRESS_PULSE_MS);
   }, PRESS_PULSE_MS);
+}
+
+// Final beat of a face-up reshuffle: after the flare, dim → swap →
+// fade up. Mirrors the back-of-card drawCard rhythm so the two paths
+// feel consistent, just without flipping `showingBack`.
+async function applyReshuffledPhoto(imgEl, fetchPromise) {
+  imgEl.classList.add("dimmed");
+  const holdUntil = performance.now() + MIN_HOLD_MS;
+  const url = await fetchPromise;
+  if (!url) {
+    imgEl.classList.remove("dimmed");
+    return;
+  }
+  await preloadImage(url);
+  const remaining = holdUntil - performance.now();
+  if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
+  imgEl.src = url;
+  await new Promise((r) => requestAnimationFrame(r));
+  imgEl.classList.remove("dimmed");
+  haptic(10);
 }
 
 function pressEnd() {
