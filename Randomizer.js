@@ -12,17 +12,32 @@ let showingBack = true;
 const BACK_SRC = "RoseLilyRed.jpg";
 
 // --- Flickr source ----------------------------------------------------
-// The deck is no longer 78 fixed tarot cards but the whole of Flickr —
-// each draw fetches one portrait photo sampled as randomly as the public
-// API allows. Strategy: pick a random upload day between Flickr's early
-// years and today, search portraits uploaded that day, jump to a random
-// page within the results, pick a random photo from that page.
+// Each draw picks a random noun from a curated artisanal list (Darius
+// Kazemi's corpora project, ~1000 nouns) and uses it as a Flickr TAG
+// query. The tag (vs free-text search) means the photographer explicitly
+// labeled their image with that word — far higher signal than a text
+// match. Within the result set we cosmic-randomly pick a page and a
+// photo, same as before. If the chosen noun has no portrait hits, we
+// re-pick a different noun and try again.
 const FLICKR_API_KEY = "bf234cae7bad1fed6373f96001293cd5";
 const FLICKR_REST = "https://api.flickr.com/services/rest/";
-const FLICKR_EPOCH = new Date("2005-01-01").getTime();
-const FLICKR_MAX_ATTEMPTS = 4;
+const FLICKR_MAX_ATTEMPTS = 6; // ~1000 nouns, mostly populated; 6 picks ≈ certain hit
 const FLICKR_PER_PAGE = 100;
 const FLICKR_RESULT_CAP = 4000; // Flickr only paginates the first 4000 hits
+
+// Lazy, memoized noun-list fetch. The file is small (~18KB) and
+// browser-cached after the first hit, so we don't bother shipping it
+// inline. If the fetch fails, draws will fail soft (back stays).
+let nounsPromise = null;
+function loadNouns() {
+  if (!nounsPromise) {
+    nounsPromise = fetch("nouns.json")
+      .then((r) => r.json())
+      .then((d) => (Array.isArray(d?.nouns) ? d.nouns : []))
+      .catch(() => []);
+  }
+  return nounsPromise;
+}
 
 // Ask Flickr to return URLs for several sizes in the search response, so
 // we can pick the smallest one that still covers the device's long edge.
@@ -203,30 +218,37 @@ async function makeCosmicRng(event) {
   };
 }
 
-// One round trip per draw becomes two: first call learns how many photos
-// were uploaded that day, second call fetches a random page from within
-// the result set. Returns a Flickr static URL or null if all attempts
-// failed (empty day, network error, etc.) — caller treats null as "the
-// cosmos declined to answer; leave the back showing."
+// Each attempt: pick a fresh random noun, ask Flickr how many portrait
+// photos carry that tag, cosmic-pick a page, cosmic-pick a photo. If the
+// tag has zero hits (or the request errors), re-pick a different noun
+// and try again — up to FLICKR_MAX_ATTEMPTS. Returns a Flickr static URL
+// or null if every attempt failed; caller treats null as "the cosmos
+// declined to answer; leave the back showing."
+
+// Tag normalization: Flickr collapses tags to lowercase and strips spaces
+// and most punctuation. We match that locally so a noun like "Frenchman"
+// queries as "frenchman".
+function normalizeTag(noun) {
+  return String(noun).toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
 async function fetchRandomFlickrUrl(event) {
-  const rng = await makeCosmicRng(event);
-  const totalDays = Math.max(1, Math.floor((Date.now() - FLICKR_EPOCH) / 86400000));
+  const [rng, nouns] = await Promise.all([makeCosmicRng(event), loadNouns()]);
+  if (!nouns.length) return null;
 
   for (let attempt = 0; attempt < FLICKR_MAX_ATTEMPTS; attempt++) {
-    const dayOffset = await rng(totalDays);
-    const dayStart = FLICKR_EPOCH + dayOffset * 86400000;
-    const minSec = Math.floor(dayStart / 1000);
-    const maxSec = Math.floor((dayStart + 86400000) / 1000);
+    const noun = nouns[await rng(nouns.length)];
+    const tag = normalizeTag(noun);
+    if (!tag) continue;
 
     const params = new URLSearchParams({
       method: "flickr.photos.search",
       api_key: FLICKR_API_KEY,
+      tags: tag,
       orientation: "portrait",
       safe_search: "1",
       content_type: "1",     // photos only — no screenshots/illustrations
       media: "photos",
-      min_upload_date: String(minSec),
-      max_upload_date: String(maxSec),
       per_page: String(FLICKR_PER_PAGE),
       page: "1",
       extras: FLICKR_EXTRAS,
@@ -237,12 +259,17 @@ async function fetchRandomFlickrUrl(event) {
     try {
       const head = await fetch(`${FLICKR_REST}?${params}`).then((r) => r.json());
       const total = Math.min(head?.photos?.total ?? 0, FLICKR_RESULT_CAP);
-      if (total === 0) continue;
+      if (total === 0) continue; // unused tag — re-pick a different noun
       const pages = Math.max(1, Math.ceil(total / FLICKR_PER_PAGE));
       const page = 1 + (await rng(pages));
-      params.set("page", String(page));
-      const body = await fetch(`${FLICKR_REST}?${params}`).then((r) => r.json());
-      const photos = body?.photos?.photo ?? [];
+      // First-page hits are already in `head`; only round-trip again if we
+      // cosmic-picked a different page.
+      let photos = head?.photos?.photo ?? [];
+      if (page !== 1) {
+        params.set("page", String(page));
+        const body = await fetch(`${FLICKR_REST}?${params}`).then((r) => r.json());
+        photos = body?.photos?.photo ?? [];
+      }
       if (!photos.length) continue;
       const p = photos[await rng(photos.length)];
       // Pick the smallest Flickr-hosted size whose long edge covers this
@@ -251,8 +278,8 @@ async function fetchRandomFlickrUrl(event) {
       // didn't come back with any size extras.
       return pickBestSizeUrl(p, CARD_TARGET_PX);
     } catch (_e) {
-      // Try the next random day; transient network errors shouldn't strand
-      // the user on a frozen back.
+      // Re-pick a different noun; transient network or rate-limit errors
+      // shouldn't strand the user on a frozen back.
     }
   }
   return null;
