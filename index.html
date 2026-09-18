@@ -2,9 +2,45 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Random Tarot Card</title>
+  <title>Image Oracle</title>
+  <!-- Deliberately NOT viewport-fit=cover (a decision carried over from the
+       single-card tarot app). With cover, the layout viewport extends under
+       the status bar and home indicator, so 100dvh becomes the whole screen
+       rather than the safe area — which grew the card and pushed it up under
+       the status bar. The centred card is the whole interface; it wins over
+       edge-to-edge. (With cover absent, env(safe-area-inset-*) resolves to
+       0, so the overlay padding below simply falls back to its base values.) -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  
+  <meta name="description" content="A single photograph, drawn at random from a word." />
+  <!-- Discourage the (service-worker-less) PWA from running a stale shell.
+       The real cache-bust is the ?v= query on the script below; this just
+       nudges the HTML itself to revalidate on launch. -->
+  <meta http-equiv="Cache-Control" content="no-cache, must-revalidate" />
+
+  <!-- PWA / home-screen identity. Icons are the card back, framed on black
+       to match the app. Theme/background stay black so the standalone
+       splash and status bar blend into the page. -->
+  <link rel="icon" href="favicon.ico" sizes="48x48" />
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Oracle" />
+  <meta name="mobile-web-app-capable" content="yes" />
+
+  <!-- Headline face for the word overlay. Cormorant Garamond italic (400 +
+       500) gives the word a literary, slightly contemplative voice without
+       going ornate — and stays plainly readable. The attribution line stays
+       in the system sans, so the page keeps the same machine-quiet voice
+       the rest of the app uses. The preconnect lines shave the cold-load
+       by skipping a separate handshake when the actual woff2 fetch begins. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,400;1,500&display=swap" />
+
   <!-- Inline CSS to ensure background is BLACK -->
   <style>
     /* Make background black, remove margins, center the image */
@@ -14,6 +50,14 @@
       padding: 0;
       height: 100%;
       overflow: hidden;
+    }
+
+    /* Standalone (home-screen app) only: kill the rubber-band overscroll so
+       a stray drag can't reveal a flash of nothing behind the chromeless
+       view. Scoped to display-mode:standalone so mobile-browser behavior
+       (incl. pull-to-refresh) is completely untouched. */
+    @media (display-mode: standalone) {
+      html, body { overscroll-behavior: none; }
     }
 
     /* The card is sized to the back image's aspect ratio (825/1427 ≈ 0.578)
@@ -59,12 +103,14 @@
       will-change: filter;
     }
 
-    /* Commit / auto-reshuffle flare: the card punches forward toward the
-       glass with a bright flash, then rebounds and settles. The whole
-       effect lives inside the card's own pixels — scale + brightness +
-       a touch of saturation — so it reads as a kinetic impact whether
-       the card fills the viewport edge-to-edge or sits with space
-       around it. No outward halo to get clipped. */
+    /* Commit / reshuffle flare: the card punches forward toward the glass
+       with a bright flash, then rebounds and settles. The whole effect
+       lives inside the card's own pixels — scale + brightness + a touch
+       of saturation — so it reads as a kinetic impact whether the card
+       fills the viewport edge-to-edge or sits with space around it. No
+       outward halo to get clipped. Duration is mirrored by SETTLE_MS in
+       Randomizer.js (the fallback timer for reduced-motion, where there
+       is no animationend to wait for). */
     @keyframes deckSettle {
       0%   { filter: brightness(1.0)  saturate(1.0);  transform: scale(1.0); }
       9%   { filter: brightness(1.65) saturate(1.15); transform: scale(1.028); }
@@ -96,6 +142,179 @@
         transform 300ms cubic-bezier(0.4, 0, 0.6, 1);
     }
 
+    /* ---------------------------------------------------------------
+       Word overlay (two-finger tap on a face-up photograph; right-click
+       or the I key on desktop).
+
+       Design — the same vocabulary as the tarot app's meanings screen:
+       - No frames, no fills, no bullets. Just typography on black.
+       - One stanza: an italic headline (the word that summoned the
+         picture) above a single flowing line separated by hairline
+         middots: the photograph's title, the photographer, the licence,
+         and the link back to Flickr. Reads like a definition entry —
+         and it is also this app's attribution, which Flickr's API terms
+         ask for whenever a photo is shown.
+
+       Choreography:
+       1. The photo recedes to a deep dim + slight blur (img.muted).
+       2. A translucent black wash settles in.
+       3. The stanza rises a few pixels; the headline arrives a beat
+          before the flow line, whose parts cascade in.
+       --------------------------------------------------------------- */
+    img.muted {
+      filter: brightness(0.18) blur(3px) saturate(0.6);
+      /* The mute itself takes a contemplative beat — the world hushes
+         before the word arrives. cubic-bezier(0.16, 1, 0.3, 1) is a deep
+         ease-out used throughout this reveal — soft landing, no late
+         acceleration. */
+      transition: filter 700ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    #info-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      box-sizing: border-box;
+      /* Base padding, floored by the device safe areas (notch, home
+         indicator) so overlay text never crowds them in standalone/PWA. */
+      padding:
+        max(clamp(28px, 7vh, 72px), env(safe-area-inset-top))
+        max(clamp(22px, 6vw, 80px), env(safe-area-inset-right))
+        max(clamp(28px, 7vh, 72px), calc(env(safe-area-inset-bottom) + 8px))
+        max(clamp(22px, 6vw, 80px), env(safe-area-inset-left));
+      background: rgba(0, 0, 0, 0.78);
+      opacity: 0;
+      pointer-events: none;
+      /* Scrim arrives slightly ahead of the text so the user gets a
+         moment of dimmed photo before the word surfaces. */
+      transition: opacity 520ms cubic-bezier(0.16, 1, 0.3, 1);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+      color: #ececec;
+      overflow: hidden;
+      /* Same reason the card carries this: iOS must not claim these
+         touches for its own scroll recogniser. With `auto`, a multi-finger
+         swipe here is handed to the native scroller and terminated with
+         touchcancel — and since only touchend grants transient user
+         activation, the share could never fire on this screen. The
+         overlay is a single short stanza, so nothing here needs to scroll. */
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+
+      /* The word is the whole headline, so it runs larger than the tarot
+         app's stanza heads; the flow line keeps that app's scale. Head
+         sizes are calibrated for Cormorant Garamond (a serif whose optical
+         size runs ~10% smaller than the system sans at the same px). */
+      --head-size:   clamp(38px, 6vw, 64px);
+      --sub-size:    clamp(14.5px, 1.7vw, 18px);
+      --line-height: 1.6;
+      --measure:     54ch;
+    }
+    #info-overlay.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .info-stage {
+      max-width: var(--measure);
+      margin: 0 auto;
+      min-height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .info-stanza {
+      margin: 0;
+      opacity: 0;
+      transform: translateY(14px);
+      /* Long, deep ease-out — the stanza feels placed rather than popped.
+         Per-stanza transition-delay is set inline by the renderer. */
+      transition:
+        opacity 900ms cubic-bezier(0.16, 1, 0.3, 1),
+        transform 900ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    #info-overlay.open .info-stanza { opacity: 1; transform: none; }
+
+    .info-head {
+      font-family: "Cormorant Garamond", "EB Garamond", Garamond, Georgia, "Times New Roman", serif;
+      font-size: var(--head-size);
+      font-style: italic;
+      font-weight: 500;
+      letter-spacing: 0.002em;
+      line-height: 1.12;
+      color: #f4f3ee;
+      margin: 0 0 0.45em 0;
+      text-wrap: balance;
+      overflow-wrap: anywhere;
+      /* Cormorant ships with proper old-style figures, contextual ligatures
+         and a discretionary swash on certain letters in italic — enabling
+         them gives the word a hand-set feel without the dramatic flourish
+         of a true display script. */
+      font-feature-settings: "liga" 1, "calt" 1, "dlig" 1, "onum" 1;
+      font-variant-ligatures: common-ligatures discretionary-ligatures;
+    }
+
+    .info-flow {
+      font-size: var(--sub-size);
+      font-weight: 300;
+      line-height: var(--line-height);
+      color: rgba(236, 236, 236, 0.62);
+      margin: 0;
+      text-wrap: pretty;
+      overflow-wrap: anywhere;
+    }
+    .info-flow .dot {
+      display: inline-block;
+      margin: 0 0.5em;
+      color: rgba(236, 236, 236, 0.26);
+      transform: translateY(-0.08em);
+    }
+    .info-flow .sub {
+      /* Individual parts fade in within the stanza for a dynamic settling
+         pass. Default state is "in" so non-JS / no-animation works. */
+      opacity: 1;
+    }
+    /* The link back to Flickr: the one interactive thing on this screen.
+       Inherits the flow's colour; a hairline underline is its only chrome. */
+    .info-flow a.sub {
+      color: inherit;
+      text-decoration: underline;
+      text-decoration-color: rgba(236, 236, 236, 0.3);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.2em;
+      -webkit-touch-callout: default;
+    }
+    #info-overlay.animating .info-flow .sub {
+      opacity: 0;
+      transform: translateY(4px);
+      /* Parts cascade in 55ms apart after the headline, with the deep
+         ease-out so each one settles softly. The inline transition-delay
+         set by the renderer is what carries the cascade. */
+      transition:
+        opacity 700ms cubic-bezier(0.16, 1, 0.3, 1),
+        transform 700ms cubic-bezier(0.16, 1, 0.3, 1);
+      display: inline-block;
+    }
+    #info-overlay.animating.open .info-flow .sub {
+      opacity: 1;
+      transform: none;
+    }
+
+    /* Portrait phones: tighter padding, full-width measure. Safe-area
+       floors keep the text clear of the notch and home indicator. */
+    @media (max-width: 520px) and (orientation: portrait) {
+      #info-overlay {
+        padding:
+          max(clamp(20px, 5vh, 36px), env(safe-area-inset-top))
+          max(18px, env(safe-area-inset-right))
+          max(clamp(20px, 5vh, 36px), calc(env(safe-area-inset-bottom) + 8px))
+          max(18px, env(safe-area-inset-left));
+        --measure: 100%;
+      }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       img {
         transition: opacity 120ms linear;
@@ -119,18 +338,37 @@
         animation: none;
         filter: brightness(1.0);
       }
+      img.muted {
+        transition: filter 140ms linear;
+      }
+      #info-overlay,
+      .info-stanza,
+      .info-flow .sub {
+        transition: opacity 140ms linear !important;
+        transform: none !important;
+        transition-delay: 0ms !important;
+      }
     }
   </style>
 </head>
 <body>
-  <!-- Local image to start (RoseLilyRed.jpg must be in the same folder) -->
-  <img 
-    src="RoseLilyRed.jpg" 
-    onclick="newPage(event)" 
-    alt="Tarot Card"
+  <!-- Local image to start (RoseLilyRed.jpg must be in the same folder).
+       alt is kept current by Randomizer.js: the back, or the drawn
+       photograph's title, photographer and word. -->
+  <img
+    src="RoseLilyRed.jpg"
+    onclick="newPage(event)"
+    alt="Card back"
   />
 
-  <!-- Load the JavaScript AFTER the HTML so it can attach to the img -->
-  <script src="Randomizer.js"></script>
+  <!-- Word overlay (two-finger tap on a face-up photo reveals this).
+       Contents are populated by Randomizer.js on open. Tapping anywhere
+       on the overlay dismisses it; the Flickr link is the one exception. -->
+  <div id="info-overlay" onclick="closeInfoOverlay()"></div>
+
+  <!-- ?v= cache-buster. BUMP THIS STRING on every deploy so installed PWAs
+       (which cache assets aggressively, especially iOS standalone) actually
+       fetch the new code instead of running a stale copy. -->
+  <script src="Randomizer.js?v=20260918-1"></script>
 </body>
 </html>
